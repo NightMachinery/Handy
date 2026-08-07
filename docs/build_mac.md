@@ -44,12 +44,12 @@ bun run tauri build --bundles dmg
 
 ## Output
 
-- DMG: `/Users/evar/code/misc/Handy/src-tauri/target/release/bundle/dmg/Handy_0.7.2_aarch64.dmg`
+- DMG: `/Users/evar/code/misc/Handy/src-tauri/target/release/bundle/dmg/Handy_<version>_aarch64.dmg`
 
 Optional checksum:
 
 ```bash
-shasum -a 256 /Users/evar/code/misc/Handy/src-tauri/target/release/bundle/dmg/Handy_0.7.2_aarch64.dmg
+shasum -a 256 /Users/evar/code/misc/Handy/src-tauri/target/release/bundle/dmg/Handy_<version>_aarch64.dmg
 ```
 
 ## Notes
