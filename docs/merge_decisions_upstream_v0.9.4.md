@@ -245,6 +245,28 @@ child process (it would keep running with no reader on its pipes). Added
 separate commit, since it is a behavior fix rather than a conflict resolution.
 The explicit kill-on-timeout path is unchanged.
 
+## Deliberate fork divergence: the update warning dialog
+
+The in-app updater points at **upstream's** release feed, so accepting an
+update replaces this fork's build with stock Handy and removes the command
+filter. The guard against that (`update_checks_enabled`) exists upstream, but
+its toggle lives on the Debug settings page, which only appears after pressing
+Cmd+Shift+D — effectively undiscoverable.
+
+`src/components/update-checker/UpdateChecker.tsx` therefore gates every
+install path behind a confirmation dialog: the former `installUpdate()` body
+became `performInstall()`, and `installUpdate()` now only opens the dialog.
+The dialog states that installing overwrites the fork, explains the
+debug-mode route to turning update checks off, and offers a one-click
+"Disable update checks" button (`updateSetting("update_checks_enabled",
+false)`). New strings live under `footer.forkUpdate*` plus `common.cancel`,
+copied into all 24 locales for the translation-completeness CI check.
+
+This is an intentional divergence with no upstream counterpart. At the next
+merge, expect conflicts in this file if upstream reworks the updater — keep
+the gate, and re-check that no new install entry point bypasses
+`installUpdate()`.
+
 ## What was verified
 
 - `cargo check` / `cargo test` in `src-tauri` (includes upstream's new suites,
@@ -271,3 +293,5 @@ The explicit kill-on-timeout path is unchanged.
   moves with it; re-read its call sites.
 - Regenerate `src/bindings.ts` (debug build) instead of merging it.
 - Re-run `bun run check:translations` — new upstream locales need our keys.
+- Keep the update warning dialog, and confirm no new install entry point
+  bypasses `installUpdate()` in `UpdateChecker.tsx`.
