@@ -26,6 +26,8 @@ dist-ssr
 *.sln
 *.sw?
 
+.claude/
+
 /target/
 recording_*
 .crush/
@@ -34,3 +36,12 @@ recording_*
 playwright-report/
 test-results/
 blob-report/
+
+.direnv
+.envrc
+
+# Nix build output
+result
+
+# Python bytecode (scripts/)
+__pycache__/

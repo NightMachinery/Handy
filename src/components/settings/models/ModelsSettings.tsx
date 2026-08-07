@@ -1,21 +1,32 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { ChevronDown, Globe } from "lucide-react";
+import { ChevronDown, Globe, RefreshCw, Search } from "lucide-react";
 import type { ModelCardStatus } from "@/components/onboarding";
 import { ModelCard } from "@/components/onboarding";
 import { useModelStore } from "@/stores/modelStore";
-import { LANGUAGES } from "@/lib/constants/languages.ts";
+import {
+  getLanguageLabel,
+  MODEL_CAPABILITY_LANGUAGES,
+  supportsLanguageCode,
+} from "@/lib/constants/languages.ts";
 import type { ModelInfo } from "@/bindings";
 
 // check if model supports a language based on its supported_languages list
 const modelSupportsLanguage = (model: ModelInfo, langCode: string): boolean => {
-  return model.supported_languages.includes(langCode);
+  return supportsLanguageCode(model.supported_languages, langCode);
 };
+
+// Legacy models are the blob (Url-sourced) .bin/ONNX downloads, superseded by
+// the catalog GGUFs. They stay runnable when already on disk, but we no longer
+// advertise the download.
+const isLegacyModel = (model: ModelInfo): boolean =>
+  typeof model.source === "object" && "Url" in model.source;
 
 export const ModelsSettings: React.FC = () => {
   const { t } = useTranslation();
   const [switchingModelId, setSwitchingModelId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const [languageFilter, setLanguageFilter] = useState("all");
   const [languageDropdownOpen, setLanguageDropdownOpen] = useState(false);
   const [languageSearch, setLanguageSearch] = useState("");
@@ -27,12 +38,15 @@ export const ModelsSettings: React.FC = () => {
     downloadingModels,
     downloadProgress,
     downloadStats,
+    verifyingModels,
     extractingModels,
     loading,
+    isRescanning,
     downloadModel,
     cancelDownload,
     selectModel,
     deleteModel,
+    rescanLocalModels,
   } = useModelStore();
 
   // click outside handler for language dropdown
@@ -59,10 +73,8 @@ export const ModelsSettings: React.FC = () => {
 
   // filtered languages for dropdown (exclude "auto")
   const filteredLanguages = useMemo(() => {
-    return LANGUAGES.filter(
-      (lang) =>
-        lang.value !== "auto" &&
-        lang.label.toLowerCase().includes(languageSearch.toLowerCase()),
+    return MODEL_CAPABILITY_LANGUAGES.filter((lang) =>
+      lang.label.toLowerCase().includes(languageSearch.toLowerCase()),
     );
   }, [languageSearch]);
 
@@ -71,12 +83,15 @@ export const ModelsSettings: React.FC = () => {
     if (languageFilter === "all") {
       return t("settings.models.filters.allLanguages");
     }
-    return LANGUAGES.find((lang) => lang.value === languageFilter)?.label || "";
+    return getLanguageLabel(languageFilter) || "";
   }, [languageFilter, t]);
 
   const getModelStatus = (modelId: string): ModelCardStatus => {
     if (modelId in extractingModels) {
       return "extracting";
+    }
+    if (modelId in verifyingModels) {
+      return "verifying";
     }
     if (modelId in downloadingModels) {
       return "downloading";
@@ -149,41 +164,53 @@ export const ModelsSettings: React.FC = () => {
     }
   };
 
-  // Filter models based on language filter
+  // Filter models by search query (name + description) and language filter
   const filteredModels = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
     return models.filter((model: ModelInfo) => {
+      // Hide deprecated legacy (.bin/ONNX) downloads unless already on disk.
+      if (isLegacyModel(model) && !model.is_downloaded) return false;
       if (languageFilter !== "all") {
         if (!modelSupportsLanguage(model, languageFilter)) return false;
       }
+      if (q) {
+        const haystack = `${model.name} ${model.description}`.toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
       return true;
     });
-  }, [models, languageFilter]);
+  }, [models, languageFilter, searchQuery]);
 
-  // Split filtered models into downloaded and available sections
+  // Split filtered models into downloaded (including custom) and available sections
   const { downloadedModels, availableModels } = useMemo(() => {
     const downloaded: ModelInfo[] = [];
     const available: ModelInfo[] = [];
 
     for (const model of filteredModels) {
-      const isDownloaded =
+      if (
+        model.is_custom ||
         model.is_downloaded ||
         model.id in downloadingModels ||
-        model.id in extractingModels;
-      if (isDownloaded) {
+        model.id in extractingModels
+      ) {
         downloaded.push(model);
       } else {
         available.push(model);
       }
     }
 
-    // Sort downloaded models so the active model is always first
+    // Sort: active model first, then non-custom, then custom at the bottom
     downloaded.sort((a, b) => {
       if (a.id === currentModel) return -1;
       if (b.id === currentModel) return 1;
+      if (a.is_custom !== b.is_custom) return a.is_custom ? 1 : -1;
       return 0;
     });
 
-    return { downloadedModels: downloaded, availableModels: available };
+    return {
+      downloadedModels: downloaded,
+      availableModels: available,
+    };
   }, [filteredModels, downloadingModels, extractingModels, currentModel]);
 
   if (loading) {
@@ -206,15 +233,41 @@ export const ModelsSettings: React.FC = () => {
           {t("settings.models.description")}
         </p>
       </div>
+
+      {/* Search bar — filter the catalog by name or description */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text/40 pointer-events-none" />
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder={t("settings.models.searchPlaceholder")}
+          className="w-full pl-9 pr-3 py-2 text-sm bg-mid-gray/10 border border-mid-gray/40 rounded-lg focus:outline-none focus:ring-1 focus:ring-logo-primary placeholder:text-text/40"
+        />
+      </div>
+
       {filteredModels.length > 0 ? (
         <div className="space-y-6">
-          {/* Downloaded Models Section */}
-          {downloadedModels.length > 0 && (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h2 className="text-sm font-medium text-text/60">
-                  {t("settings.models.yourModels")}
-                </h2>
+          {/* Downloaded Models Section — header always visible so filter stays accessible */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-medium text-text/60">
+                {t("settings.models.yourModels")}
+              </h2>
+              <div className="flex items-center gap-2">
+                {/* Rescan local sources for models added outside Handy */}
+                <button
+                  type="button"
+                  onClick={() => rescanLocalModels()}
+                  disabled={isRescanning}
+                  title={t("settings.models.rescan.tooltip")}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg bg-mid-gray/10 text-text/60 hover:bg-mid-gray/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <RefreshCw
+                    className={`w-3.5 h-3.5 ${isRescanning ? "animate-spin" : ""}`}
+                  />
+                  <span>{t("settings.models.rescan.label")}</span>
+                </button>
                 {/* Language filter dropdown */}
                 <div className="relative" ref={languageDropdownRef}>
                   <button
@@ -310,22 +363,22 @@ export const ModelsSettings: React.FC = () => {
                   )}
                 </div>
               </div>
-              {downloadedModels.map((model: ModelInfo) => (
-                <ModelCard
-                  key={model.id}
-                  model={model}
-                  status={getModelStatus(model.id)}
-                  onSelect={handleModelSelect}
-                  onDownload={handleModelDownload}
-                  onDelete={handleModelDelete}
-                  onCancel={handleModelCancel}
-                  downloadProgress={getDownloadProgress(model.id)}
-                  downloadSpeed={getDownloadSpeed(model.id)}
-                  showRecommended={false}
-                />
-              ))}
             </div>
-          )}
+            {downloadedModels.map((model: ModelInfo) => (
+              <ModelCard
+                key={model.id}
+                model={model}
+                status={getModelStatus(model.id)}
+                onSelect={handleModelSelect}
+                onDownload={handleModelDownload}
+                onDelete={handleModelDelete}
+                onCancel={handleModelCancel}
+                downloadProgress={getDownloadProgress(model.id)}
+                downloadSpeed={getDownloadSpeed(model.id)}
+                showRecommended={false}
+              />
+            ))}
+          </div>
 
           {/* Available Models Section */}
           {availableModels.length > 0 && (
@@ -344,7 +397,7 @@ export const ModelsSettings: React.FC = () => {
                   onCancel={handleModelCancel}
                   downloadProgress={getDownloadProgress(model.id)}
                   downloadSpeed={getDownloadSpeed(model.id)}
-                  showRecommended={false}
+                  showRecommended={true}
                 />
               ))}
             </div>
