@@ -38,6 +38,7 @@ SH
 chmod +x /tmp/fakebin/xattr
 
 PATH=/tmp/fakebin:$PATH \
+SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX14.4.sdk \
 CLANG_MODULE_CACHE_PATH=/tmp/clang-module-cache \
 bun run tauri build --bundles dmg
 ```
