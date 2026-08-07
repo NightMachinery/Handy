@@ -5,7 +5,9 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { arch, platform } from "@tauri-apps/plugin-os";
+import { TriangleAlert } from "lucide-react";
 import { ProgressBar } from "../shared";
+import { Alert } from "../ui/Alert";
 import { useSettings } from "../../hooks/useSettings";
 import { commands } from "../../bindings";
 import {
@@ -27,11 +29,12 @@ const UpdateChecker: React.FC<UpdateCheckerProps> = ({ className = "" }) => {
   const [showUpToDate, setShowUpToDate] = useState(false);
   const [showPortableUpdateDialog, setShowPortableUpdateDialog] =
     useState(false);
+  const [showForkWarningDialog, setShowForkWarningDialog] = useState(false);
   const [portableInstallerUrl, setPortableInstallerUrl] = useState<string>(
     PORTABLE_RELEASES_URL,
   );
 
-  const { settings, isLoading } = useSettings();
+  const { settings, isLoading, updateSetting } = useSettings();
   const settingsLoaded = !isLoading && settings !== null;
   const updateChecksEnabled = settings?.update_checks_enabled ?? false;
 
@@ -112,7 +115,19 @@ const UpdateChecker: React.FC<UpdateCheckerProps> = ({ className = "" }) => {
     checkForUpdates();
   };
 
-  const installUpdate = async () => {
+  // Upstream releases do not carry this fork's changes, so installing one
+  // replaces the running build. Every install path is gated behind the warning.
+  const installUpdate = () => {
+    if (!updateChecksEnabled) return;
+    setShowForkWarningDialog(true);
+  };
+
+  const disableUpdateChecks = () => {
+    setShowForkWarningDialog(false);
+    updateSetting("update_checks_enabled", false);
+  };
+
+  const performInstall = async () => {
     if (!updateChecksEnabled) return;
 
     const portable = await commands.isPortable();
@@ -199,8 +214,49 @@ const UpdateChecker: React.FC<UpdateCheckerProps> = ({ className = "" }) => {
   // the releases index, so the dialog has to say "browse" rather than "download".
   const hasDirectInstaller = portableInstallerUrl !== PORTABLE_RELEASES_URL;
 
+  const debugShortcut = platform() === "macos" ? "Cmd+Shift+D" : "Ctrl+Shift+D";
+
   return (
     <>
+      {showForkWarningDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-background border border-mid-gray/20 rounded-lg p-6 max-w-lg w-full mx-4 space-y-4">
+            <h2 className="flex items-center gap-2 text-base font-semibold">
+              <TriangleAlert className="h-5 w-5 shrink-0 text-yellow-500" />
+              {t("footer.forkUpdateTitle")}
+            </h2>
+            <Alert variant="warning">{t("footer.forkUpdateWarning")}</Alert>
+            <p className="text-sm text-text/70">
+              {t("footer.forkUpdateHowToDisable", {
+                shortcut: debugShortcut,
+              })}
+            </p>
+            <div className="flex flex-wrap gap-2 justify-end">
+              <button
+                className="px-3 py-1.5 text-sm rounded border border-mid-gray/20 hover:bg-mid-gray/10 transition-colors"
+                onClick={() => setShowForkWarningDialog(false)}
+              >
+                {t("common.cancel")}
+              </button>
+              <button
+                className="px-3 py-1.5 text-sm rounded border border-mid-gray/20 hover:bg-mid-gray/10 transition-colors"
+                onClick={disableUpdateChecks}
+              >
+                {t("footer.forkUpdateDisableButton")}
+              </button>
+              <button
+                className="px-3 py-1.5 text-sm rounded bg-red-500 text-white hover:bg-red-500/80 transition-colors"
+                onClick={() => {
+                  setShowForkWarningDialog(false);
+                  performInstall();
+                }}
+              >
+                {t("footer.forkUpdateConfirmButton")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {showPortableUpdateDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-background border border-mid-gray/20 rounded-lg p-6 max-w-md w-full mx-4 space-y-4">

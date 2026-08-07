@@ -655,6 +655,11 @@
     "installing": "Instalando...",
     "preparing": "Preparando...",
     "checkForUpdates": "Buscar actualizaciones",
+    "forkUpdateTitle": "This update will replace your custom build",
+    "forkUpdateWarning": "This copy of Handy was built from a personal fork. Official updates do not contain the fork's changes, so installing this update will overwrite your build and remove its custom features, including the command filter.",
+    "forkUpdateHowToDisable": "To stop update checks entirely: press {{shortcut}} in this window to reveal the Debug page in the sidebar, then turn off \"Check for Updates\". You can hide the Debug page again with the same shortcut.",
+    "forkUpdateDisableButton": "Disable update checks",
+    "forkUpdateConfirmButton": "Update anyway",
     "portableUpdateTitle": "Actualización manual necesaria",
     "portableUpdateMessage": "Las instalaciones portátiles no se pueden actualizar automáticamente. Descarga abajo el instalador para tu sistema, ejecútalo e instálalo en la misma carpeta: tu carpeta Data/ (ajustes, modelos, grabaciones) se conserva.",
     "portableUpdateButton": "Descargar instalador",
@@ -668,7 +673,8 @@
     "open": "Abrir",
     "copy": "Copiar",
     "clear": "Limpiar",
-    "noOptionsFound": "No se encontraron opciones"
+    "noOptionsFound": "No se encontraron opciones",
+    "cancel": "Cancel"
   },
   "accessibility": {
     "permissionsDescription": "Handy necesita permisos de accesibilidad para escribir texto transcrito.",

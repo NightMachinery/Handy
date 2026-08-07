@@ -655,6 +655,11 @@
     "installing": "Yükleniyor...",
     "preparing": "Hazırlanıyor...",
     "checkForUpdates": "Güncellemeleri kontrol et",
+    "forkUpdateTitle": "This update will replace your custom build",
+    "forkUpdateWarning": "This copy of Handy was built from a personal fork. Official updates do not contain the fork's changes, so installing this update will overwrite your build and remove its custom features, including the command filter.",
+    "forkUpdateHowToDisable": "To stop update checks entirely: press {{shortcut}} in this window to reveal the Debug page in the sidebar, then turn off \"Check for Updates\". You can hide the Debug page again with the same shortcut.",
+    "forkUpdateDisableButton": "Disable update checks",
+    "forkUpdateConfirmButton": "Update anyway",
     "portableUpdateTitle": "Manuel güncelleme gerekli",
     "portableUpdateMessage": "Taşınabilir kurulumlar otomatik olarak güncellenemez. Aşağıdan sisteminize uygun yükleyiciyi indirin, çalıştırın ve aynı klasöre kurun — Data/ klasörünüz (ayarlar, modeller, kayıtlar) yerinde kalır.",
     "portableUpdateButton": "Yükleyiciyi indir",
@@ -668,7 +673,8 @@
     "open": "Aç",
     "copy": "Kopyala",
     "clear": "Temizle",
-    "noOptionsFound": "Seçenek bulunamadı"
+    "noOptionsFound": "Seçenek bulunamadı",
+    "cancel": "Cancel"
   },
   "accessibility": {
     "permissionsDescription": "Handy, transkribe edilen metni yazabilmek için erişilebilirlik izinlerine ihtiyaç duyar.",

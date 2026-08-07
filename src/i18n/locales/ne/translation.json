@@ -655,6 +655,11 @@
     "installing": "इन्स्टल गरिँदैछ...",
     "preparing": "तयारी गरिँदैछ...",
     "checkForUpdates": "अपडेटहरू जाँच गर्नुहोस्",
+    "forkUpdateTitle": "This update will replace your custom build",
+    "forkUpdateWarning": "This copy of Handy was built from a personal fork. Official updates do not contain the fork's changes, so installing this update will overwrite your build and remove its custom features, including the command filter.",
+    "forkUpdateHowToDisable": "To stop update checks entirely: press {{shortcut}} in this window to reveal the Debug page in the sidebar, then turn off \"Check for Updates\". You can hide the Debug page again with the same shortcut.",
+    "forkUpdateDisableButton": "Disable update checks",
+    "forkUpdateConfirmButton": "Update anyway",
     "portableUpdateTitle": "म्यानुअल अपडेट आवश्यक",
     "portableUpdateMessage": "पोर्टेबल इन्स्टलहरू स्वतः अपडेट गर्न सकिँदैन। तलबाट आफ्नो प्रणालीका लागि इन्स्टलर डाउनलोड गर्नुहोस्, चलाउनुहोस् र उही फोल्डरमा इन्स्टल गर्नुहोस् — तपाईंको Data/ फोल्डर (सेटिङ, मोडेल, रेकर्डिङ) जस्ताको तस्तै रहन्छ।",
     "portableUpdateButton": "इन्स्टलर डाउनलोड गर्नुहोस्",
@@ -671,7 +676,8 @@
     "open": "खोल्नुहोस्",
     "copy": "कपी गर्नुहोस्",
     "clear": "खाली गर्नुहोस्",
-    "noOptionsFound": "कुनै विकल्प भेटिएन"
+    "noOptionsFound": "कुनै विकल्प भेटिएन",
+    "cancel": "Cancel"
   },
   "accessibility": {
     "permissionsDescription": "ट्रान्सक्राइब गरिएको टेक्स्ट टाइप गर्न Handy लाई एक्सेसिबिलिटी अनुमति चाहिन्छ।",

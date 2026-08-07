@@ -655,6 +655,11 @@
     "installing": "インストール中…",
     "preparing": "準備中…",
     "checkForUpdates": "アップデートを確認",
+    "forkUpdateTitle": "This update will replace your custom build",
+    "forkUpdateWarning": "This copy of Handy was built from a personal fork. Official updates do not contain the fork's changes, so installing this update will overwrite your build and remove its custom features, including the command filter.",
+    "forkUpdateHowToDisable": "To stop update checks entirely: press {{shortcut}} in this window to reveal the Debug page in the sidebar, then turn off \"Check for Updates\". You can hide the Debug page again with the same shortcut.",
+    "forkUpdateDisableButton": "Disable update checks",
+    "forkUpdateConfirmButton": "Update anyway",
     "portableUpdateTitle": "手動での更新が必要です",
     "portableUpdateMessage": "ポータブル版は自動的に更新できません。下のボタンからお使いのシステム向けのインストーラーをダウンロードし、実行して同じフォルダーにインストールしてください。Data フォルダー(設定、モデル、録音)はそのまま残ります。",
     "portableUpdateButton": "インストーラーをダウンロード",
@@ -668,7 +673,8 @@
     "open": "開く",
     "copy": "コピー",
     "clear": "クリア",
-    "noOptionsFound": "オプションが見つかりません"
+    "noOptionsFound": "オプションが見つかりません",
+    "cancel": "Cancel"
   },
   "accessibility": {
     "permissionsDescription": "Handy が文字起こしテキストを入力するには、アクセシビリティ権限が必要です。",
