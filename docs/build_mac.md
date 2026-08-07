@@ -54,6 +54,12 @@ shasum -a 256 /Users/evar/code/misc/Handy/src-tauri/target/release/bundle/dmg/Ha
 
 ## Notes
 
+- Since the v0.9.4 upstream merge, the app links against ONNX Runtime (`ort`)
+  whose prebuilt binary references CoreML symbols (`MLComputePlan`,
+  `MLOptimizationHints`) available only in macOS SDK 14.4+. Building (debug or
+  release) fails at link time with `Undefined symbols: _OBJC_CLASS_$_MLComputePlan`
+  on older Xcode installations — update Xcode until `xcrun --show-sdk-version`
+  reports at least 14.4.
 - `--bundles dmg` avoids updater artifact signing errors when `TAURI_SIGNING_PRIVATE_KEY` is not set.
 - If you need updater artifacts, use the normal build and provide `TAURI_SIGNING_PRIVATE_KEY` (and password if encrypted).
 - Notarization is skipped unless Apple notarization env vars are configured.

@@ -44,7 +44,10 @@ Added `src-tauri/src/command_filter.rs`.
 
 ### 3) Pipeline order behavior
 
-In `src-tauri/src/actions.rs`, command filtering is integrated into the transcription pipeline:
+In `src-tauri/src/actions.rs`, command filtering is integrated into
+`process_transcription_output()`, the shared transcript pipeline (since the
+v0.9.4 upstream merge). Every caller of the pipeline gets the filter: live
+dictation and the history re-transcribe command.
 
 1. transcription result
 2. optional Chinese variant conversion
@@ -58,8 +61,20 @@ Failure behavior:
 
 Empty-output behavior:
 
-- If filter succeeds but returns trimmed-empty stdout, paste is canceled.
+- If filter succeeds but returns trimmed-empty stdout, the pipeline returns an
+  empty final text, which suppresses the paste.
 - History still saves the original transcription.
+
+Cancellation behavior:
+
+- The upstream cancel shortcut drops the in-flight pipeline future; the filter
+  child process is killed on drop (`kill_on_drop`) so it cannot outlive a
+  cancelled dictation.
+
+Overlay behavior:
+
+- The "processing" overlay state is shown whenever the filter applies to the
+  fired hotkey, not only for AI post-processing.
 
 ### 4) Shortcut registration behavior
 
