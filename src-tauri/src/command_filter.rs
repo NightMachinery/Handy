@@ -79,6 +79,9 @@ pub async fn run_command_filter(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        // The pipeline future may be dropped mid-flight by the cancellation
+        // polling in actions.rs; the child must not outlive it.
+        .kill_on_drop(true)
         .spawn()
     {
         Ok(child) => child,
