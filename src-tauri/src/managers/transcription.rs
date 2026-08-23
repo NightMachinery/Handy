@@ -386,6 +386,12 @@ impl TranscriptionManager {
         self.engine_lease.busy_owner()
     }
 
+    /// Whether a dictation is queued behind whoever holds the engine. A long
+    /// CLI job reports this so the user can see why the app feels stuck.
+    pub fn engine_has_interactive_waiters(&self) -> bool {
+        self.engine_lease.has_interactive_waiters()
+    }
+
     /// Claim the engine if it is free, without waiting. Used by the streaming
     /// worker, which falls back to batch transcription rather than queueing.
     pub fn try_lease_engine(&self, owner: LeaseOwner) -> Result<EngineLease, LeaseError> {

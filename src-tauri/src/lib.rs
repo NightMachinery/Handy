@@ -11,6 +11,7 @@ mod command_filter;
 mod commands;
 mod helpers;
 mod input;
+pub mod ipc;
 mod llm_client;
 mod managers;
 mod memory;
@@ -182,6 +183,26 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(transcription_manager.clone());
     app_handle.manage(history_manager.clone());
     app_handle.manage(tray::CurrentTrayIconState::new());
+
+    // The CLI control socket needs the managers above, so start it here rather
+    // than earlier in setup. Never reached in headless mode, which builds its
+    // own stripped state and exits.
+    let ipc_disabled = app_handle
+        .try_state::<CliArgs>()
+        .is_some_and(|args| args.no_ipc);
+    if ipc_disabled {
+        log::info!("CLI control socket disabled by --no-ipc");
+    } else {
+        match ipc::start(app_handle) {
+            // Held for the life of the app; dropping it would end the accept loop.
+            Ok(server) => {
+                app_handle.manage(server);
+            }
+            // A missing control socket costs the CLI, not the app, so log and
+            // carry on rather than failing startup.
+            Err(e) => log::error!("Failed to start the CLI control socket: {:#}", e),
+        }
+    }
 
     // Note: Shortcuts are NOT initialized here.
     // The frontend is responsible for calling the `initialize_shortcuts` command
@@ -994,6 +1015,8 @@ pub fn run(cli_args: CliArgs) {
                 if let Some(tm) = app.try_state::<Arc<TranscriptionManager>>() {
                     let _ = tm.unload_model();
                 }
+                // Leave no socket behind for the next start to have to probe.
+                ipc::shutdown();
             }
             _ => {}
         });
