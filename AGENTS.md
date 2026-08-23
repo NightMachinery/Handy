@@ -131,6 +131,22 @@ Settings are stored using Tauri's store plugin with reactive updates:
 
 The app enforces single instance behavior — launching when already running brings the settings window to front rather than creating a new process. Remote control flags (`--toggle-transcription`, etc.) work by launching a second instance that sends args to the running instance via `tauri_plugin_single_instance`, then exits.
 
+That channel is one-way by construction: the plugin's callback returns nothing, and the second process calls `exit(0)` from inside the plugin's own setup hook, before any Handy code in it runs. It can ask the app to do something; it can never receive a result back.
+
+### CLI Control Socket
+
+For requests that need a reply — `handy FILE.wav` returning a transcript, `handy status` — the app also listens on a request/response local socket (`src-tauri/src/ipc/`): a Unix domain socket on macOS/Linux, a named pipe on Windows, via the `interprocess` crate. Newline-delimited JSON, with bulk audio riding the same connection as a length-declared attachment.
+
+The single-instance plugin is untouched and unaffected; the two mechanisms coexist. See [docs/cli.md](docs/cli.md) for the protocol, the security model, and the recipe for adding a request kind.
+
+Client mode is decided in `main.rs` **before** `tauri::Builder` is touched — otherwise the single-instance plugin forwards argv to the running app and exits, and nothing the client would print ever happens.
+
+### Engine Lease
+
+`TranscriptionManager` hands the engine out of its `Mutex<Option<LoadedEngine>>` for the duration of a call rather than holding the mutex across inference. Every path that needs the engine therefore acquires an `EngineLease` first (`src-tauri/src/managers/engine_lease.rs`) and holds it for the whole operation. Waiters block on a condvar instead of failing, and `Batch` waiters — real dictations, with a human watching — take priority over queued `Cli` jobs.
+
+Do not add a queue in front of the lease. The lease is the thing that serializes engine access; a second scheduler on top re-decides the same question and breaks fail-fast requests, which then wait behind a running job instead of being told the engine is busy.
+
 ## Internationalization (i18n)
 
 All user-facing strings must use i18next translations. ESLint enforces this (no hardcoded strings in JSX).
@@ -173,7 +189,7 @@ For translation contribution guidelines, see [CONTRIBUTING_TRANSLATIONS.md](CONT
 
 Handy supports command-line parameters on all platforms for integration with scripts, window managers, and autostart configurations.
 
-**Implementation:** `cli.rs` (definitions), `main.rs` (parsing), `lib.rs` (applying), `signal_handle.rs` (shared logic)
+**Implementation:** `cli/mod.rs` (definitions), `cli/client.rs` (client-mode dispatch), `main.rs` (parsing), `lib.rs` (applying), `signal_handle.rs` (shared logic)
 
 | Flag                     | Description                                                |
 | ------------------------ | ---------------------------------------------------------- |
@@ -183,12 +199,17 @@ Handy supports command-line parameters on all platforms for integration with scr
 | `--start-hidden`         | Launch without showing the main window (tray icon visible) |
 | `--no-tray`              | Launch without system tray (closing window quits the app)  |
 | `--debug`                | Enable debug mode with verbose (Trace) logging             |
+| `--no-ipc`               | Launch without the CLI control socket                      |
+
+Subcommands (`transcribe`, `status`, `ping`) and the bare form `handy FILE.wav` go over the control socket instead; see [docs/cli.md](docs/cli.md).
 
 **Key design decisions:**
 
 - CLI flags are runtime-only overrides — they do NOT modify persisted settings
 - Remote control flags work via `tauri_plugin_single_instance`: second instance sends args, then exits
 - `send_transcription_input()` in `signal_handle.rs` is shared between signal handlers and CLI
+- `handy FILE.wav` works via a clap `external_subcommand` catch-all, re-parsed as `transcribe`. With an optional subcommand, clap resolves the first token against subcommand names before positionals, so a bare path would otherwise fail as an unrecognised subcommand. Every pre-existing flag still parses unchanged — `cli/client.rs` has the regression tests that pin this.
+- The client decodes audio and sends samples; the server never opens a caller-supplied path. That avoids macOS TCC prompts against the GUI process, resolves relative paths against the user's shell rather than the app's, and keeps the socket from being a file-read oracle.
 
 ## Debug Mode
 

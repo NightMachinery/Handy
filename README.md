@@ -82,6 +82,19 @@ Handy includes an advanced debug mode for development and troubleshooting. Acces
 
 Handy supports command-line flags for controlling a running instance and customizing startup behavior. These work on all platforms (macOS, Windows, Linux).
 
+**Transcribe a file with the running instance** (fork addition — see [docs/cli.md](docs/cli.md)):
+
+```bash
+handy recording.wav             # Transcribe using the running app's loaded model
+handy recording.wav --json      # Same, with timings and metadata
+handy status                    # What the running instance is doing
+handy ping                      # Check that it answers
+```
+
+The transcript goes to stdout and nothing else does, so `handy rec.wav | pbcopy` works. Because it reuses the model the app already has in memory, this avoids the cold multi-gigabyte load that `-f` pays. If Handy is not running it exits 3 rather than silently loading a model; pass `--local` to opt into that.
+
+Any WAV is accepted — any bit depth, channel count, and sample rate are converted to 16 kHz mono.
+
 **Remote control flags** (sent to an already-running instance via the single-instance plugin):
 
 ```bash
@@ -96,7 +109,16 @@ handy --cancel                  # Cancel the current operation
 handy --start-hidden            # Start without showing the main window
 handy --no-tray                 # Start without the system tray icon
 handy --debug                   # Enable debug mode with verbose logging
+handy --no-ipc                  # Start without the CLI control socket
 handy --help                    # Show all available flags
+```
+
+**Headless transcription** (loads a private copy of the model in this process, rather than using the running app's):
+
+```bash
+handy -f recording.wav          # Transcribe and exit
+handy --list-models             # Show model ids for --model
+handy --list-devices            # Show compute devices for --device-index
 ```
 
 Flags can be combined for autostart scenarios:
