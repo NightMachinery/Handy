@@ -191,6 +191,27 @@ SH
   # The CLI is its own crate and its own binary, so tauri does not build it.
   say "Building the CLI"
   ( cd "$REPO_ROOT/src-tauri" && cargo build --release -p handy-cli )
+
+  # Put the CLI inside the bundle, beside the app binary. That keeps the two
+  # together if the .app is moved or copied, and lets the PATH entry be a
+  # symlink into a stable location rather than a copy that goes stale after
+  # the next rebuild.
+  say "Adding the CLI to the bundle"
+  cp "$REPO_ROOT/src-tauri/target/release/handy-cli" "$BUNDLE/Contents/MacOS/handy-cli"
+
+  # tauri already signed the bundle; adding a file invalidates that, so re-sign
+  # the new binary and then the bundle. Inner code first, outermost last.
+  SIGN_AS="$SIGN_IDENTITY"
+  has_identity || SIGN_AS="-"
+  say "Re-signing the bundle (identity: $SIGN_AS)"
+  codesign --force --options runtime \
+    --entitlements "$REPO_ROOT/src-tauri/Entitlements.plist" \
+    --sign "$SIGN_AS" "$BUNDLE/Contents/MacOS/handy-cli" 2>&1 | sed 's/^/    /'
+  codesign --force --options runtime \
+    --entitlements "$REPO_ROOT/src-tauri/Entitlements.plist" \
+    --sign "$SIGN_AS" "$BUNDLE" 2>&1 | sed 's/^/    /'
+  codesign --verify --strict "$BUNDLE" \
+    || die "the bundle failed signature verification after adding the CLI"
 fi
 
 # ---------------------------------------------------------------------------
@@ -234,32 +255,27 @@ fi
 # CLI symlink
 # ---------------------------------------------------------------------------
 
-CLI_BUILT="$REPO_ROOT/src-tauri/target/release/handy-cli"
-CLI_DEST="$BIN_DIR/$CLI_NAME"
-# Records that the file at CLI_DEST is ours, so a re-install may replace it
-# while a wrapper script the user wrote is still protected.
-CLI_MARKER="$BIN_DIR/.handy-cli-installed"
+CLI_SOURCE="$APP_DIR/$APP_NAME/Contents/MacOS/handy-cli"
+CLI_LINK="$BIN_DIR/$CLI_NAME"
 
-[ -x "$CLI_BUILT" ] || die "no CLI binary at $CLI_BUILT — run without --no-build first"
+[ -x "$CLI_SOURCE" ] || die "no CLI binary at $CLI_SOURCE — run without --no-build first"
 
 mkdir -p "$BIN_DIR"
 
-# Never clobber something we did not put there. A regular file at this path is
-# most likely a wrapper the user wrote, and overwriting it silently would
-# destroy work with no way to recover it.
-if [ -e "$CLI_DEST" ] || [ -L "$CLI_DEST" ]; then
-  if [ ! -f "$CLI_MARKER" ] && [ ! -L "$CLI_DEST" ]; then
-    die "$CLI_DEST already exists and was not installed by this script;
-    move it aside and re-run, or set HANDY_BIN_DIR to install elsewhere"
-  fi
+# Only ever replace a symlink. A regular file here is something you put there —
+# a wrapper script, say — and clobbering it silently would destroy work with no
+# way to recover it.
+if [ -e "$CLI_LINK" ] && [ ! -L "$CLI_LINK" ]; then
+  die "$CLI_LINK exists and is not a symlink; move it aside and re-run,
+    or set HANDY_BIN_DIR to install elsewhere"
 fi
 
-say "Installing the CLI to $CLI_DEST"
-# Copy to a temp name and rename, so a running `handy` is never truncated.
-cp "$CLI_BUILT" "$CLI_DEST.new"
-chmod +x "$CLI_DEST.new"
-mv -f "$CLI_DEST.new" "$CLI_DEST"
-printf 'installed by scripts/install-macos.sh\n' > "$CLI_MARKER"
+if [ -L "$CLI_LINK" ] && [ "$(readlink "$CLI_LINK")" = "$CLI_SOURCE" ]; then
+  say "CLI symlink already correct: $CLI_LINK"
+else
+  say "Linking $CLI_LINK -> $CLI_SOURCE"
+  ln -sfn "$CLI_SOURCE" "$CLI_LINK"
+fi
 
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
@@ -277,8 +293,8 @@ if [ "$DO_INSTALL" = 1 ]; then
 
   # The control socket comes up during app startup, so give it a moment.
   for _ in $(seq 1 25); do
-    if "$CLI_DEST" ping >/dev/null 2>&1; then
-      say "$("$CLI_DEST" ping)"
+    if "$CLI_SOURCE" ping >/dev/null 2>&1; then
+      say "$("$CLI_SOURCE" ping)"
       say "Done. Try: handy --help"
       exit 0
     fi

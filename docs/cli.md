@@ -37,9 +37,23 @@ command line is handed to the app binary verbatim. There is one definition of
 each of those flags, in the app, and the CLI deliberately does not model them.
 So every documented invocation still works through the single `handy` command.
 
-`bun run install:macos` installs both; `bash scripts/install-macos.sh
---link-only` reinstalls just the CLI. The CLI locates the app via
-`HANDY_APP_BIN`, then a sibling binary, then `/Applications/Handy.app`.
+Both binaries ship inside the bundle, side by side:
+
+```
+/Applications/Handy.app/Contents/MacOS/handy       38M   the app
+/Applications/Handy.app/Contents/MacOS/handy-cli   1.5M  the CLI
+~/bin/handy -> .../Contents/MacOS/handy-cli              what you call
+```
+
+Keeping the CLI in the bundle means the PATH entry is a symlink into a stable
+location rather than a copy that goes stale after the next rebuild, and moving
+or copying the `.app` takes the CLI with it. It does mean the bundle is
+re-signed after the CLI is added, since tauri signs before that point —
+`scripts/install-macos.sh` does this and verifies the result.
+
+`bun run install:macos` installs both; `--link-only` refreshes just the
+symlink. The CLI finds the app via `HANDY_APP_BIN`, then its sibling in the
+bundle, then `/Applications/Handy.app`.
 
 ## Why a socket, and not the existing plugin
 
