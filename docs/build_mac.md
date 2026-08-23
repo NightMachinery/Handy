@@ -21,9 +21,46 @@ installing without linking leaves `handy file.wav` present but unreachable.
 Useful flags:
 
 ```bash
-bash scripts/install-macos.sh --no-build    # install an already-built bundle
-bash scripts/install-macos.sh --link-only   # just refresh the CLI symlink
+bash scripts/install-macos.sh --no-build       # install an already-built bundle
+bash scripts/install-macos.sh --link-only      # just refresh the CLI symlink
+bash scripts/install-macos.sh --setup-signing  # create the signing identity (once)
 ```
+
+## Keeping macOS permissions across reinstalls
+
+Run this once:
+
+```bash
+bash scripts/install-macos.sh --setup-signing
+```
+
+Without it, `tauri.conf.json` signs ad-hoc (`signingIdentity: "-"`) and the
+app's designated requirement is its code hash:
+
+```
+# designated => cdhash H"389ae20f..."
+```
+
+That hash changes on every build, so macOS TCC sees each install as a
+different application and resets Accessibility and Microphone permissions —
+you re-grant them after every rebuild.
+
+`--setup-signing` creates a self-signed code signing certificate named
+"Handy Local Signing" in your login keychain and adds a Code Signing trust
+setting (macOS will prompt for your password — this is the step that needs it;
+`security find-identity` only lists _trusted_ identities, so an untrusted
+certificate is invisible to the build). Afterwards the designated requirement
+becomes the certificate's leaf hash, which is stable for the certificate's
+ten-year lifetime, and permissions persist.
+
+The identity is passed to the build as a `--config` override rather than
+committed to `tauri.conf.json`, so a fresh checkout without the certificate
+still builds — it just falls back to ad-hoc and says so. Override the name with
+`HANDY_SIGN_IDENTITY` if you already have a certificate you prefer.
+
+Note this is a _local_ identity, not an Apple Developer one: it does nothing
+for Gatekeeper or for distributing the app to anyone else. Its only job is to
+give your own machine a stable identity to remember permissions against.
 
 `HANDY_APP_DIR` and `HANDY_BIN_DIR` override the destinations. The script never
 replaces a regular file at the symlink target — if you keep your own `handy`
