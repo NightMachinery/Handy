@@ -2,19 +2,19 @@
 #
 # Build and install Handy on macOS, and put the `handy` CLI on your PATH.
 #
-# The CLI lives inside the app bundle (Handy.app/Contents/MacOS/handy), which
-# is not on anyone's PATH, so a symlink is what makes `handy file.wav` usable.
-# Installing without it leaves the connected CLI technically present and
-# practically unreachable, which is why this is one script rather than two.
+# Two artifacts: the app bundle, and `handy` — a separate, small binary that
+# talks to the running app over its control socket and forwards app flags to
+# it. Installing the app without the CLI leaves `handy file.wav` unreachable,
+# which is why this is one script rather than two.
 #
-#   bash scripts/install-macos.sh                  build, install, link
-#   bash scripts/install-macos.sh --no-build       install an already-built bundle
-#   bash scripts/install-macos.sh --link-only      just refresh the CLI symlink
+#   bash scripts/install-macos.sh                  build and install both
+#   bash scripts/install-macos.sh --no-build       install what is already built
+#   bash scripts/install-macos.sh --link-only      reinstall just the CLI
 #   bash scripts/install-macos.sh --setup-signing  create the local signing identity
 #
 # Environment overrides:
 #   HANDY_APP_DIR        where the bundle goes      (default /Applications)
-#   HANDY_BIN_DIR        where the CLI symlink goes (default ~/bin)
+#   HANDY_BIN_DIR        where the CLI goes         (default ~/bin)
 #   HANDY_SIGN_IDENTITY  code signing identity      (default "Handy Local Signing")
 #   SDKROOT              macOS SDK for the build    (auto-detected)
 #
@@ -187,6 +187,10 @@ SH
   if [ "$build_status" -ne 0 ]; then
     say "Bundler exited $build_status after bundling (expected without TAURI_SIGNING_PRIVATE_KEY)"
   fi
+
+  # The CLI is its own crate and its own binary, so tauri does not build it.
+  say "Building the CLI"
+  ( cd "$REPO_ROOT/src-tauri" && cargo build --release -p handy-cli )
 fi
 
 # ---------------------------------------------------------------------------
@@ -230,26 +234,32 @@ fi
 # CLI symlink
 # ---------------------------------------------------------------------------
 
-CLI_SOURCE="$APP_DIR/$APP_NAME/Contents/MacOS/$CLI_NAME"
-CLI_LINK="$BIN_DIR/$CLI_NAME"
+CLI_BUILT="$REPO_ROOT/src-tauri/target/release/handy-cli"
+CLI_DEST="$BIN_DIR/$CLI_NAME"
+# Records that the file at CLI_DEST is ours, so a re-install may replace it
+# while a wrapper script the user wrote is still protected.
+CLI_MARKER="$BIN_DIR/.handy-cli-installed"
 
-[ -x "$CLI_SOURCE" ] || die "no CLI binary at $CLI_SOURCE"
+[ -x "$CLI_BUILT" ] || die "no CLI binary at $CLI_BUILT — run without --no-build first"
 
 mkdir -p "$BIN_DIR"
 
-# Only ever replace a symlink. A regular file here is something the user put
-# there — a wrapper script, say — and clobbering it silently would destroy
-# work with no way to recover it.
-if [ -e "$CLI_LINK" ] && [ ! -L "$CLI_LINK" ]; then
-  die "$CLI_LINK exists and is not a symlink; move it aside and re-run"
+# Never clobber something we did not put there. A regular file at this path is
+# most likely a wrapper the user wrote, and overwriting it silently would
+# destroy work with no way to recover it.
+if [ -e "$CLI_DEST" ] || [ -L "$CLI_DEST" ]; then
+  if [ ! -f "$CLI_MARKER" ] && [ ! -L "$CLI_DEST" ]; then
+    die "$CLI_DEST already exists and was not installed by this script;
+    move it aside and re-run, or set HANDY_BIN_DIR to install elsewhere"
+  fi
 fi
 
-if [ -L "$CLI_LINK" ] && [ "$(readlink "$CLI_LINK")" = "$CLI_SOURCE" ]; then
-  say "CLI symlink already correct: $CLI_LINK"
-else
-  say "Linking $CLI_LINK -> $CLI_SOURCE"
-  ln -sfn "$CLI_SOURCE" "$CLI_LINK"
-fi
+say "Installing the CLI to $CLI_DEST"
+# Copy to a temp name and rename, so a running `handy` is never truncated.
+cp "$CLI_BUILT" "$CLI_DEST.new"
+chmod +x "$CLI_DEST.new"
+mv -f "$CLI_DEST.new" "$CLI_DEST"
+printf 'installed by scripts/install-macos.sh\n' > "$CLI_MARKER"
 
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
@@ -267,8 +277,8 @@ if [ "$DO_INSTALL" = 1 ]; then
 
   # The control socket comes up during app startup, so give it a moment.
   for _ in $(seq 1 25); do
-    if "$CLI_SOURCE" ping >/dev/null 2>&1; then
-      say "$("$CLI_SOURCE" ping)"
+    if "$CLI_DEST" ping >/dev/null 2>&1; then
+      say "$("$CLI_DEST" ping)"
       say "Done. Try: handy --help"
       exit 0
     fi

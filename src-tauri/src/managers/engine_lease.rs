@@ -22,8 +22,8 @@
 //! only reorders the queue; [`CLI_STARVATION_CAP`] bounds how long a CLI job
 //! can be held back by a stream of dictations.
 
+pub use handy_core::protocol::LeaseOwner;
 use log::warn;
-use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -35,44 +35,6 @@ const CLI_STARVATION_CAP: Duration = Duration::from_secs(60);
 /// Longest single condvar wait. Bounding it keeps cancellation and the
 /// starvation cap responsive without needing a notify for either.
 const POLL_SLICE: Duration = Duration::from_millis(200);
-
-/// Who is holding (or wants) the engine.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeaseOwner {
-    /// The live-preview streaming worker.
-    Stream,
-    /// A one-shot `transcribe()` call: hotkey dictation, history retry, the
-    /// headless `--transcribe-file` path.
-    Batch,
-    /// A job submitted over the CLI IPC socket.
-    Cli,
-}
-
-impl LeaseOwner {
-    /// Whether a waiter of this kind has a human blocked on the result.
-    ///
-    /// `Stream` is excluded deliberately: it never waits (it uses
-    /// [`EngineLeaseGate::try_acquire`] and falls back to batch), so counting it
-    /// would only ever inflate the interactive-waiter count.
-    fn is_interactive_waiter(self) -> bool {
-        matches!(self, LeaseOwner::Batch)
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            LeaseOwner::Stream => "live preview",
-            LeaseOwner::Batch => "transcription",
-            LeaseOwner::Cli => "CLI job",
-        }
-    }
-}
-
-impl fmt::Display for LeaseOwner {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
 
 /// Why a lease could not be acquired.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

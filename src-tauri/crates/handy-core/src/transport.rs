@@ -4,7 +4,7 @@
 //! for hand-rolled `UnixListener` + Win32 named pipes would not touch the
 //! protocol, the server, or the client.
 
-use super::endpoint;
+use crate::endpoint;
 use anyhow::{Context, Result};
 use interprocess::local_socket::traits::{Listener as _, Stream as _, StreamCommon as _};
 use interprocess::local_socket::{ListenerOptions, Name, Stream};

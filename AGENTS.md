@@ -135,11 +135,19 @@ That channel is one-way by construction: the plugin's callback returns nothing, 
 
 ### CLI Control Socket
 
-For requests that need a reply — `handy FILE.wav` returning a transcript, `handy status` — the app also listens on a request/response local socket (`src-tauri/src/ipc/`): a Unix domain socket on macOS/Linux, a named pipe on Windows, via the `interprocess` crate. Newline-delimited JSON, with bulk audio riding the same connection as a length-declared attachment.
+For requests that need a reply — `handy FILE.wav` returning a transcript, `handy status` — the app also listens on a request/response local socket: a Unix domain socket on macOS/Linux, a named pipe on Windows, via the `interprocess` crate. Newline-delimited JSON, with bulk audio riding the same connection as a length-declared attachment.
+
+`src-tauri` is a cargo workspace with three members:
+
+- `crates/handy-core` — protocol, endpoint, transport, IPC client, WAV decoding. **Must never depend on tauri, transcribe-cpp, transcribe-rs or cpal.** Those link unconditionally through build scripts, so anything importing them makes the CLI 38 MB instead of 1.5 MB. This is why the IPC _server_ stays in the app while only the client is shared, and why `LeaseOwner` lives in the protocol rather than in `managers`.
+- `crates/handy-cli` — the `handy` binary. Console subsystem, so no Windows console attachment hack.
+- the app itself — `src/ipc/` holds only `server.rs` and `handlers/`, re-exporting the rest from `handy-core`.
+
+The CLI models only client-facing verbs. App flags (`--toggle-transcription`, `-f`, `--start-hidden`, …) are detected in argv by `is_app_invocation` and the command line is `exec`ed into the app binary verbatim, so each flag has exactly one definition and the two cannot drift.
 
 The single-instance plugin is untouched and unaffected; the two mechanisms coexist. See [docs/cli.md](docs/cli.md) for the protocol, the security model, and the recipe for adding a request kind.
 
-Client mode is decided in `main.rs` **before** `tauri::Builder` is touched — otherwise the single-instance plugin forwards argv to the running app and exits, and nothing the client would print ever happens.
+Client work never enters the app process at all — that is the point of the separate binary. Were the CLI ever folded back into `src/main.rs`, it would have to run before `tauri::Builder` is touched, because the single-instance plugin forwards argv to the running app and exits from inside its own setup hook, so anything printed afterwards never happens.
 
 ### Engine Lease
 

@@ -9,10 +9,10 @@
 //! plain `eprintln!` — this process never initializes `tauri-plugin-log`, so
 //! nothing can leak into a pipe.
 
-use super::{CliArgs, Command, CommonArgs, IfBusy, TranscribeArgs};
-use crate::audio_toolkit::decode_to_16k_mono;
-use crate::ipc::client::{ConnectError, IdleWatchdog, Session};
-use crate::ipc::protocol::*;
+use crate::args::{Cli, Command, CommonArgs, IfBusy, TranscribeArgs};
+use handy_core::audio::decode_to_16k_mono;
+use handy_core::client::{ConnectError, IdleWatchdog, Session};
+use handy_core::protocol::*;
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -39,15 +39,16 @@ const KNOWN_VERBS: &[&str] = &["transcribe", "status", "ping"];
 pub enum Dispatch {
     /// The work is done; exit with this code.
     Exit(i32),
-    /// Not a client invocation — carry on and start the app. Carries the args
-    /// to start it with, which `--local` rewrites.
-    RunApp(Box<CliArgs>),
+    /// Hand off to the app binary with this argv — `--local`, or the
+    /// no-instance fallback. A separate binary cannot start the app itself.
+    RunLocal(Vec<std::ffi::OsString>),
 }
 
-/// Handle a client invocation, if this is one.
-pub fn dispatch(args: CliArgs) -> Dispatch {
+/// Handle a client invocation.
+pub fn dispatch(args: Cli) -> Dispatch {
     let Some(command) = args.command.clone() else {
-        return Dispatch::RunApp(Box::new(args));
+        // main() handles the empty-argv case before we get here.
+        return Dispatch::Exit(EXIT_USAGE);
     };
 
     let command = match resolve_bare(command) {
@@ -58,7 +59,7 @@ pub fn dispatch(args: CliArgs) -> Dispatch {
     match command {
         Command::Ping(common) => Dispatch::Exit(run_ping(&common)),
         Command::Status(common) => Dispatch::Exit(run_status(&common)),
-        Command::Transcribe(t) => run_transcribe(*Box::new(t), args),
+        Command::Transcribe(t) => run_transcribe(t),
         // resolve_bare has already turned this into a Transcribe or exited.
         Command::Bare(_) => unreachable!("bare tokens are resolved before dispatch"),
     }
@@ -224,11 +225,11 @@ fn print_simple_result(body: &ResultBody, json: bool) {
     }
 }
 
-fn run_transcribe(args: TranscribeArgs, original: CliArgs) -> Dispatch {
+fn run_transcribe(args: TranscribeArgs) -> Dispatch {
     // --local never touches the socket: rewrite into the existing headless
     // invocation and let the normal app entry point take over. No new path.
     if args.local {
-        return Dispatch::RunApp(Box::new(local_args(&args, original)));
+        return Dispatch::RunLocal(local_argv(&args));
     }
 
     let path = match resolve_path(&args.file) {
@@ -268,7 +269,7 @@ fn run_transcribe(args: TranscribeArgs, original: CliArgs) -> Dispatch {
             // does not have, so it is opt-in rather than automatic.
             if code == EXIT_NOT_RUNNING && wants_local_fallback(&args) {
                 eprintln!("handy: no running instance; transcribing locally");
-                return Dispatch::RunApp(Box::new(local_args(&args, original)));
+                return Dispatch::RunLocal(local_argv(&args));
             }
             return Dispatch::Exit(code);
         }
@@ -309,7 +310,7 @@ fn run_transcribe(args: TranscribeArgs, original: CliArgs) -> Dispatch {
 
 fn stream_transcription(session: &mut Session, args: &TranscribeArgs, progress: bool) -> i32 {
     let watchdog = idle_watchdog(&args.common);
-    let interrupts = crate::ipc::client::spawn_interrupt_watcher();
+    let interrupts = handy_core::client::spawn_interrupt_watcher();
     let mut renderer = ProgressRenderer::new(
         std::io::IsTerminal::is_terminal(&std::io::stderr()),
         args.partials,
@@ -613,16 +614,20 @@ fn wants_local_fallback(args: &TranscribeArgs) -> bool {
         || std::env::var(FALLBACK_ENV).is_ok_and(|v| v.eq_ignore_ascii_case("local"))
 }
 
-/// Rewrite a client transcribe into the existing headless invocation.
-fn local_args(args: &TranscribeArgs, original: CliArgs) -> CliArgs {
-    CliArgs {
-        command: None,
-        transcribe_file: Some(args.file.clone()),
-        model: args.model.clone(),
-        json: args.common.json,
-        debug: original.debug,
-        ..CliArgs::default()
+/// Build the app-binary command line for a local transcription.
+///
+/// `-f` is the app's own headless path, so this reuses it rather than
+/// duplicating any behaviour on this side.
+fn local_argv(args: &TranscribeArgs) -> Vec<std::ffi::OsString> {
+    let mut argv: Vec<std::ffi::OsString> = vec!["-f".into(), args.file.clone().into_os_string()];
+    if let Some(model) = &args.model {
+        argv.push("--model".into());
+        argv.push(model.into());
     }
+    if args.common.json {
+        argv.push("--json".into());
+    }
+    argv
 }
 
 /// Canonicalize, expanding a leading `~/` that a quoted argument kept from the
@@ -671,96 +676,45 @@ mod tests {
     use super::*;
     use clap::Parser;
 
-    fn parse(argv: &[&str]) -> CliArgs {
-        CliArgs::try_parse_from(argv).unwrap_or_else(|e| panic!("failed to parse {argv:?}: {e}"))
+    fn parse(argv: &[&str]) -> Cli {
+        Cli::try_parse_from(argv).unwrap_or_else(|e| panic!("failed to parse {argv:?}: {e}"))
     }
 
-    // ---- the regression net: every documented flag must keep working -------
-
-    #[test]
-    fn legacy_flags_still_parse_without_a_subcommand() {
-        let args = parse(&["handy", "--toggle-transcription"]);
-        assert!(args.toggle_transcription);
-        assert!(args.command.is_none());
-
-        let args = parse(&["handy", "--toggle-post-process"]);
-        assert!(args.toggle_post_process);
-        assert!(args.command.is_none());
-
-        let args = parse(&["handy", "--cancel"]);
-        assert!(args.cancel);
-
-        let args = parse(&["handy", "--start-hidden", "--no-tray"]);
-        assert!(args.start_hidden);
-        assert!(args.no_tray);
-        assert!(args.command.is_none());
-
-        let args = parse(&["handy", "-f", "x.wav", "--model", "m", "--json"]);
-        assert_eq!(args.transcribe_file, Some(PathBuf::from("x.wav")));
-        assert_eq!(args.model.as_deref(), Some("m"));
-        assert!(args.json);
-        assert!(args.command.is_none());
-
-        let args = parse(&["handy", "--list-models", "--json"]);
-        assert!(args.list_models);
-
-        let args = parse(&["handy", "--list-devices"]);
-        assert!(args.list_devices);
-
-        let args = parse(&["handy", "--debug"]);
-        assert!(args.debug);
-    }
-
-    #[test]
-    fn no_arguments_starts_the_app() {
-        let args = parse(&["handy"]);
-        assert!(args.command.is_none());
-        assert!(matches!(dispatch(args), Dispatch::RunApp(_)));
-    }
-
-    // ---- the new surface ---------------------------------------------------
-
-    #[test]
-    fn a_bare_path_is_captured_and_reparsed_as_transcribe() {
-        let args = parse(&["handy", "recording.wav"]);
-        let command = resolve_bare(args.command.unwrap()).expect("should re-parse");
-        match command {
-            Command::Transcribe(t) => assert_eq!(t.file, PathBuf::from("recording.wav")),
-            other => panic!("wrong command: {other:?}"),
+    fn transcribe_of(argv: &[&str]) -> TranscribeArgs {
+        match resolve_bare(parse(argv).command.expect("a command")) {
+            Ok(Command::Transcribe(t)) => t,
+            other => panic!("expected transcribe, got {other:?}"),
         }
     }
 
     #[test]
+    fn a_bare_path_is_captured_and_reparsed_as_transcribe() {
+        assert_eq!(
+            transcribe_of(&["handy", "recording.wav"]).file,
+            PathBuf::from("recording.wav")
+        );
+    }
+
+    #[test]
     fn a_bare_path_keeps_its_trailing_flags() {
-        let args = parse(&[
+        let t = transcribe_of(&[
             "handy",
             "rec.wav",
             "--json",
             "--llm-post-process",
             "--paste",
         ]);
-        let command = resolve_bare(args.command.unwrap()).expect("should re-parse");
-        match command {
-            Command::Transcribe(t) => {
-                assert_eq!(t.file, PathBuf::from("rec.wav"));
-                assert!(t.common.json);
-                assert!(t.llm_post_process);
-                assert!(t.paste);
-                assert!(!t.history, "history must be opt-in");
-            }
-            other => panic!("wrong command: {other:?}"),
-        }
+        assert_eq!(t.file, PathBuf::from("rec.wav"));
+        assert!(t.common.json);
+        assert!(t.llm_post_process);
+        assert!(t.paste);
+        assert!(!t.history, "history must be opt-in");
     }
 
     #[test]
     fn absolute_and_relative_paths_both_work() {
         for path in ["/tmp/a.wav", "./a.wav", "../a.wav", "sub/dir/a.wav"] {
-            let args = parse(&["handy", path]);
-            let command = resolve_bare(args.command.unwrap()).expect("should re-parse");
-            assert!(
-                matches!(command, Command::Transcribe(_)),
-                "failed for {path}"
-            );
+            assert_eq!(transcribe_of(&["handy", path]).file, PathBuf::from(path));
         }
     }
 
@@ -774,10 +728,7 @@ mod tests {
             parse(&["handy", "ping", "--json"]).command,
             Some(Command::Ping(_))
         ));
-        match parse(&["handy", "transcribe", "a.wav", "--local"]).command {
-            Some(Command::Transcribe(t)) => assert!(t.local),
-            other => panic!("wrong command: {other:?}"),
-        }
+        assert!(transcribe_of(&["handy", "transcribe", "a.wav", "--local"]).local);
     }
 
     #[test]
@@ -786,7 +737,6 @@ mod tests {
         assert_eq!(resolve_bare(args.command.unwrap()).unwrap_err(), EXIT_USAGE);
         assert_eq!(closest_verb("stauts"), Some("status"));
         assert_eq!(closest_verb("pign"), Some("ping"));
-        // A real word that is not a near-miss gets no suggestion.
         assert_eq!(closest_verb("frobnicate"), None);
     }
 
@@ -801,59 +751,29 @@ mod tests {
 
     #[test]
     fn history_flags_override_each_other_in_order() {
-        let args = parse(&["handy", "transcribe", "a.wav", "--history", "--no-history"]);
-        match args.command {
-            Some(Command::Transcribe(t)) => {
-                assert!(t.no_history);
-                assert!(
-                    !(t.history && !t.no_history),
-                    "should resolve to no history"
-                );
-            }
-            other => panic!("wrong command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn local_rewrites_into_the_headless_invocation() {
-        let args = parse(&["handy", "transcribe", "a.wav", "--local", "--model", "m"]);
-        let Some(Command::Transcribe(t)) = args.command.clone() else {
-            panic!("expected transcribe");
-        };
-        let rewritten = local_args(&t, args);
-        assert_eq!(rewritten.transcribe_file, Some(PathBuf::from("a.wav")));
-        assert_eq!(rewritten.model.as_deref(), Some("m"));
-        assert!(rewritten.command.is_none(), "must not re-enter client mode");
+        let t = transcribe_of(&["handy", "a.wav", "--history", "--no-history"]);
+        assert!(t.no_history);
     }
 
     /// Three distinct output modes, and the default must match what a
     /// dictation would have produced for the same audio.
     #[test]
     fn output_pipeline_has_three_modes() {
-        let default = parse(&["handy", "a.wav"]);
-        let Some(Command::Transcribe(t)) = resolve_bare(default.command.unwrap()).ok() else {
-            panic!("expected transcribe");
-        };
-        assert!(!t.llm_post_process, "LLM must be opt-in");
-        assert!(!t.raw, "pipeline runs by default, like a dictation");
+        let default = transcribe_of(&["handy", "a.wav"]);
+        assert!(!default.llm_post_process, "LLM must be opt-in");
+        assert!(!default.raw, "pipeline runs by default, like a dictation");
 
-        let llm = parse(&["handy", "transcribe", "a.wav", "--llm-post-process"]);
-        match llm.command {
-            Some(Command::Transcribe(t)) => assert!(t.llm_post_process && !t.raw),
-            other => panic!("wrong command: {other:?}"),
-        }
+        let llm = transcribe_of(&["handy", "a.wav", "--llm-post-process"]);
+        assert!(llm.llm_post_process && !llm.raw);
 
-        let raw = parse(&["handy", "transcribe", "a.wav", "--raw"]);
-        match raw.command {
-            Some(Command::Transcribe(t)) => assert!(t.raw && !t.llm_post_process),
-            other => panic!("wrong command: {other:?}"),
-        }
+        let raw = transcribe_of(&["handy", "a.wav", "--raw"]);
+        assert!(raw.raw && !raw.llm_post_process);
     }
 
     #[test]
     fn raw_and_llm_post_process_are_mutually_exclusive() {
         assert!(
-            CliArgs::try_parse_from([
+            Cli::try_parse_from([
                 "handy",
                 "transcribe",
                 "a.wav",
@@ -869,11 +789,7 @@ mod tests {
     /// split out; keep that spelling working.
     #[test]
     fn the_old_post_process_spelling_still_parses() {
-        let args = parse(&["handy", "transcribe", "a.wav", "--post-process"]);
-        match args.command {
-            Some(Command::Transcribe(t)) => assert!(t.llm_post_process),
-            other => panic!("wrong command: {other:?}"),
-        }
+        assert!(transcribe_of(&["handy", "a.wav", "--post-process"]).llm_post_process);
     }
 
     #[test]
@@ -883,12 +799,25 @@ mod tests {
             ("fail", IfBusy::Fail),
             ("local", IfBusy::Local),
         ] {
-            let args = parse(&["handy", "transcribe", "a.wav", "--if-busy", flag]);
-            match args.command {
-                Some(Command::Transcribe(t)) => assert_eq!(t.if_busy, want),
-                other => panic!("wrong command: {other:?}"),
-            }
+            assert_eq!(
+                transcribe_of(&["handy", "a.wav", "--if-busy", flag]).if_busy,
+                want
+            );
         }
+    }
+
+    /// `--local` becomes an app-binary command line, since a separate binary
+    /// cannot load a model itself.
+    #[test]
+    fn local_becomes_an_app_invocation() {
+        let t = transcribe_of(&["handy", "a.wav", "--local", "--model", "m", "--json"]);
+        let argv: Vec<String> = local_argv(&t)
+            .into_iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(argv, vec!["-f", "a.wav", "--model", "m", "--json"]);
+        // And the app must recognise it as its own.
+        assert!(crate::args::is_app_invocation(&argv));
     }
 
     #[test]
@@ -898,7 +827,6 @@ mod tests {
             expand_tilde(Path::new("~/audio/a.wav")),
             PathBuf::from("/home/example/audio/a.wav")
         );
-        // A bare "~" or an embedded tilde is left alone.
         assert_eq!(expand_tilde(Path::new("a~b.wav")), PathBuf::from("a~b.wav"));
     }
 

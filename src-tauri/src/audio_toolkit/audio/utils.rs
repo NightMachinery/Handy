@@ -1,5 +1,5 @@
-use super::decode::decode_to_16k_mono;
 use anyhow::Result;
+use handy_core::audio::decode_to_16k_mono;
 use hound::{WavReader, WavSpec, WavWriter};
 use log::debug;
 use std::path::Path;

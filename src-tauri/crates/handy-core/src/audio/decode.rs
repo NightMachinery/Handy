@@ -10,7 +10,7 @@
 //! converts correctly or says why it cannot.
 
 use super::FrameResampler;
-use crate::audio_toolkit::constants::WHISPER_SAMPLE_RATE;
+use crate::WHISPER_SAMPLE_RATE;
 use anyhow::{bail, Result};
 use hound::{SampleFormat, WavReader};
 use std::io::{Read, Seek};

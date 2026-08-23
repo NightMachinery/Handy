@@ -14,24 +14,32 @@ handy recording.wav          connected — uses the running app's loaded model
 handy -f recording.wav       local     — loads a private copy in this process
 ```
 
-## Getting `handy` on your PATH
+## Two binaries
 
-The binary lives inside the app bundle, at
-`Handy.app/Contents/MacOS/handy` — which is on nobody's PATH. On macOS,
-`bun run install:macos` builds, installs, and creates the symlink in one step;
-`bash scripts/install-macos.sh --link-only` refreshes just the symlink against
-an app you already have installed.
+`handy` is a separate, small binary from the app — 1.5 MB against the app's
+38 MB. The split is not cosmetic: the app links transcribe-cpp and ONNX Runtime
+through build scripts, so a CLI sharing its crate would pull the whole
+inference stack in whether it called it or not.
 
-By hand it is one line, and worth knowing since the app bundle is the source of
-truth either way:
+It buys three things:
 
-```bash
-ln -sfn /Applications/Handy.app/Contents/MacOS/handy ~/bin/handy
-```
+- **A bare `handy` prints help.** The app binary cannot do that — macOS
+  launches a bundle with an empty argv, so for it "no arguments" has to mean
+  "start the GUI".
+- **No console hack on Windows.** The app is a GUI-subsystem binary with no
+  console attached in release builds; the CLI is console-subsystem and simply
+  prints.
+- **Startup stays cheap** — no chance of dragging in Tauri by accident.
 
-Note that the same binary is the app: running it with no client subcommand
-launches Handy rather than erroring, so `handy` on a machine where Handy is not
-running will start it.
+Flags belonging to the app — `--toggle-transcription`, `-f/--transcribe-file`,
+`--start-hidden`, `--list-models`, `--debug` — are recognised in argv and the
+command line is handed to the app binary verbatim. There is one definition of
+each of those flags, in the app, and the CLI deliberately does not model them.
+So every documented invocation still works through the single `handy` command.
+
+`bun run install:macos` installs both; `bash scripts/install-macos.sh
+--link-only` reinstalls just the CLI. The CLI locates the app via
+`HANDY_APP_BIN`, then a sibling binary, then `/Applications/Handy.app`.
 
 ## Why a socket, and not the existing plugin
 
@@ -360,31 +368,39 @@ events as NDJSON, which turns Handy into a scriptable dictation primitive),
 ## Module layout
 
 ```
-src-tauri/src/ipc/
-├── protocol.rs    frames and codec; no Tauri, so it unit-tests without an app
-├── endpoint.rs    where the socket lives; shared verbatim by both sides
+src-tauri/crates/handy-core/      shared by the app and the CLI
+├── protocol.rs    frames, codec, LeaseOwner; pure serde, unit-tests standalone
+├── endpoint.rs    where the socket lives; used verbatim by both sides
 ├── transport.rs   the only module that names a socket implementation
-├── server.rs      accept loop, job queue, cancellation, heartbeats
-├── client.rs      the blocking client; no Tauri dependency
-└── handlers/      one module per request kind
+├── client.rs      the blocking client
+└── audio/         WAV decoding and resampling
 
-src-tauri/src/cli/
-├── mod.rs         clap definitions for both the flat flags and subcommands
-├── client.rs      dispatch, output formatting, exit codes
-└── console_win.rs Windows console attachment
+src-tauri/crates/handy-cli/       the `handy` binary
+├── main.rs        routing: client verb, app passthrough, or help
+├── args.rs        client-facing clap surface + app-flag detection
+└── client.rs      dispatch, output formatting, exit codes
+
+src-tauri/src/ipc/                app-side only
+├── server.rs      accept loop, cancellation, heartbeats
+└── handlers/      one module per request kind
 ```
+
+The rule that keeps this honest: **nothing in `handy-core` may depend on tauri,
+transcribe-cpp, transcribe-rs or cpal.** That is why the IPC _server_ lives in
+the app while only the client is shared, and why `LeaseOwner` was moved into
+the protocol — it crosses the wire, and leaving it in the app's `managers`
+module dragged the inference stack into anything that spoke the protocol.
 
 ## Notes and gotchas
 
-**Windows release builds have no console.** `main.rs` sets
-`windows_subsystem = "windows"`, so a release binary starts detached and every
-`println!` goes to an invalid handle. Client mode attaches to the parent
-console and repoints the standard handles to fix this. Two things it cannot
-fix: `cmd.exe` does not wait on a GUI-subsystem executable, so the prompt
-returns immediately and output interleaves — use `start /wait handy …` or
-PowerShell. And if piping becomes the primary Windows workflow, a separate
-console-subsystem `handy-cli` shim is the real answer, at the cost of a second
-link of an LTO release binary.
+**Windows consoles.** The app is a GUI-subsystem binary
+(`windows_subsystem = "windows"`), so it has no console in release builds and
+anything it prints goes to an invalid handle. That is why the CLI is a separate
+console-subsystem binary rather than a mode of the app — it prints normally,
+`cmd.exe` waits for it, and no `AttachConsole` shim is needed. App flags
+forwarded through it are `exec`ed into the app, which still has no console;
+that only matters for `-f/--transcribe-file`, whose output is best captured
+with `--json` redirected to a file.
 
 **`handy FILE.wav` works through a clap trick.** With an optional subcommand,
 clap resolves the first token against subcommand names before positionals, so a

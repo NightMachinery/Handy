@@ -2466,6 +2466,7 @@ dependencies = [
  "futures-util",
  "gtk",
  "gtk-layer-shell",
+ "handy-core",
  "handy-keys",
  "hf-hub",
  "hound",
@@ -2518,6 +2519,34 @@ dependencies = [
  "vad-rs",
  "windows 0.61.3",
  "winreg 0.55.0",
+]
+
+[[package]]
+name = "handy-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "handy-core",
+ "serde",
+ "serde_json",
+ "strsim",
+]
+
+[[package]]
+name = "handy-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hound",
+ "interprocess",
+ "libc",
+ "log",
+ "rubato",
+ "serde",
+ "serde_json",
+ "signal-hook",
+ "tempfile",
 ]
 
 [[package]]

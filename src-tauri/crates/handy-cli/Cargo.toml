@@ -1,0 +1,22 @@
+[package]
+name = "handy-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Command-line client for a running Handy instance"
+publish = false
+
+[[bin]]
+name = "handy-cli"
+path = "src/main.rs"
+
+# No tauri, no transcribe-cpp, no ONNX, no cpal. That is the entire point of
+# this crate existing separately: those link unconditionally via build scripts,
+# so sharing the app's crate would produce a ~40 MB CLI that pulls in an
+# inference stack it never calls.
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+handy-core = { path = "../handy-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+strsim = "0.11.0"

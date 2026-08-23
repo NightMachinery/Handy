@@ -1,1 +1,2 @@
-pub const WHISPER_SAMPLE_RATE: u32 = 16000;
+// Single source of truth lives in handy-core so the CLI shares it.
+pub use handy_core::WHISPER_SAMPLE_RATE;

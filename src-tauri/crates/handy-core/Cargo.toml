@@ -1,0 +1,25 @@
+[package]
+name = "handy-core"
+version = "0.1.0"
+edition = "2021"
+description = "Shared protocol, transport and audio decoding for the Handy app and its CLI"
+publish = false
+
+# Deliberately minimal. This crate is what lets `handy-cli` exist as a small
+# binary: nothing here may depend on tauri, transcribe-cpp or ONNX, or the CLI
+# would link the entire inference stack it never uses.
+[dependencies]
+anyhow = "1"
+hound = "3.5.1"
+interprocess = "2"
+log = "0.4"
+rubato = "0.16.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+signal-hook = "0.3"
+
+[dev-dependencies]
+tempfile = "3"

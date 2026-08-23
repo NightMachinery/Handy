@@ -4,9 +4,9 @@
 //! a model, and never initializes the logger, so nothing can leak onto stdout
 //! except the result the user asked for.
 
-use super::endpoint;
-use super::protocol::*;
-use super::transport;
+use crate::endpoint;
+use crate::protocol::*;
+use crate::transport;
 use anyhow::{bail, Context, Result};
 use std::io::{BufReader, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};

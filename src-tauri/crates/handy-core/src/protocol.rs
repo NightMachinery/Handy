@@ -20,10 +20,51 @@
 //! - [`PROTOCOL_VERSION`] bumps only on a breaking change. The server advertises
 //!   `min_protocol` so it can serve older clients.
 
-use crate::managers::engine_lease::LeaseOwner;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::io::{self, BufRead, Read, Write};
+
+/// Who is holding (or wants) the transcription engine.
+///
+/// Defined here rather than beside the lease itself because it crosses the
+/// wire in `StatusBody`. Keeping it in the app's `managers` module would drag
+/// the whole inference stack into anything that speaks the protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LeaseOwner {
+    /// The live-preview streaming worker.
+    Stream,
+    /// A one-shot transcription: hotkey dictation, history retry, the headless
+    /// `--transcribe-file` path.
+    Batch,
+    /// A job submitted over the CLI control socket.
+    Cli,
+}
+
+impl LeaseOwner {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LeaseOwner::Stream => "live preview",
+            LeaseOwner::Batch => "transcription",
+            LeaseOwner::Cli => "CLI job",
+        }
+    }
+
+    /// Whether a waiter of this kind has a human blocked on the result.
+    ///
+    /// `Stream` is excluded deliberately: it never waits — it tries once and
+    /// falls back to batch — so counting it would only inflate the count.
+    pub fn is_interactive_waiter(self) -> bool {
+        matches!(self, LeaseOwner::Batch)
+    }
+}
+
+impl fmt::Display for LeaseOwner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// Current wire version. Bump only for a breaking change.
 pub const PROTOCOL_VERSION: u32 = 1;
