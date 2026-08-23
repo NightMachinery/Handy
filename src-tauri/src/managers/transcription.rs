@@ -1339,7 +1339,20 @@ impl TranscriptionManager {
             match stream.finalize() {
                 // After finalize the committed prefix holds the whole text;
                 // display() = committed + tentative is the safe read.
-                Ok(_) => Ok(Some(stream.text().display())),
+                Ok(_) => {
+                    // The last feed leaves committed audio a shade under the
+                    // total, so without this the bar stops at 99% — which reads
+                    // as unfinished in a log, where the line is not erased.
+                    let text = stream.text();
+                    on_progress(StreamProgress {
+                        committed_secs: total_secs,
+                        total_secs,
+                        elapsed: started.elapsed(),
+                        committed_text: text.committed.clone(),
+                        tentative_text: text.tentative.clone(),
+                    });
+                    Ok(Some(text.display()))
+                }
                 Err(e) => {
                     warn!("stream finalize failed ({e}); using batch instead");
                     Ok(None)
