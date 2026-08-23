@@ -17,6 +17,7 @@
     "test:playwright": "playwright test",
     "test:playwright:ui": "playwright test --ui",
     "check:translations": "bun scripts/check-translations.ts",
+    "install:macos": "bash scripts/install-macos.sh",
     "postinstall": "bun scripts/check-nix-deps.ts"
   },
   "dependencies": {

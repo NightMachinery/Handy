@@ -2,6 +2,36 @@
 
 This guide builds a signed local macOS release DMG for Handy.
 
+## Quick path: build, install, and link the CLI
+
+```bash
+bun run install:macos
+```
+
+`scripts/install-macos.sh` does the whole loop: builds the release bundle with
+the SDK and `xattr` workarounds below applied automatically, quits a running
+Handy, backs the old app up to `/Applications/Handy-previous.app`, installs the
+new one, symlinks the `handy` CLI into `~/bin`, and waits for the app to answer
+on its control socket.
+
+The symlink is the part worth doing every time. The CLI binary lives inside the
+bundle at `Handy.app/Contents/MacOS/handy`, which is on nobody's PATH, so
+installing without linking leaves `handy file.wav` present but unreachable.
+
+Useful flags:
+
+```bash
+bash scripts/install-macos.sh --no-build    # install an already-built bundle
+bash scripts/install-macos.sh --link-only   # just refresh the CLI symlink
+```
+
+`HANDY_APP_DIR` and `HANDY_BIN_DIR` override the destinations. The script never
+replaces a regular file at the symlink target — if you keep your own `handy`
+wrapper there, it stops and tells you rather than destroying it.
+
+The rest of this document is the manual procedure, and explains why the
+workarounds exist.
+
 ## Prerequisites
 
 - Rust (stable) and Bun installed

@@ -127,11 +127,13 @@ Flags can be combined for autostart scenarios:
 handy --start-hidden --no-tray
 ```
 
-> **macOS tip:** When Handy is installed as an app bundle, invoke the binary directly:
+> **macOS tip:** The CLI binary lives inside the app bundle, which is not on your PATH. Either invoke it directly:
 >
 > ```bash
-> /Applications/Handy.app/Contents/MacOS/Handy --toggle-transcription
+> /Applications/Handy.app/Contents/MacOS/handy --toggle-transcription
 > ```
+>
+> or put it on your PATH once — `bun run install:macos` does this as part of installing, or `bash scripts/install-macos.sh --link-only` just creates the symlink.
 
 ## Known Issues & Current Limitations
 

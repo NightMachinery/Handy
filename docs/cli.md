@@ -14,6 +14,25 @@ handy recording.wav          connected — uses the running app's loaded model
 handy -f recording.wav       local     — loads a private copy in this process
 ```
 
+## Getting `handy` on your PATH
+
+The binary lives inside the app bundle, at
+`Handy.app/Contents/MacOS/handy` — which is on nobody's PATH. On macOS,
+`bun run install:macos` builds, installs, and creates the symlink in one step;
+`bash scripts/install-macos.sh --link-only` refreshes just the symlink against
+an app you already have installed.
+
+By hand it is one line, and worth knowing since the app bundle is the source of
+truth either way:
+
+```bash
+ln -sfn /Applications/Handy.app/Contents/MacOS/handy ~/bin/handy
+```
+
+Note that the same binary is the app: running it with no client subcommand
+launches Handy rather than erroring, so `handy` on a machine where Handy is not
+running will start it.
+
 ## Why a socket, and not the existing plugin
 
 Handy already forwards CLI arguments to a running instance via
