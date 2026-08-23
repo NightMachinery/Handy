@@ -845,8 +845,8 @@ impl ShortcutAction for TranscribeAction {
                             // Also indicate processing when only the command
                             // filter will run (it may be slow), not just for
                             // LLM post-processing.
-                            let will_run_filter = get_settings(&ah)
-                                .command_filter_applies_to_hotkey(post_process);
+                            let will_run_filter =
+                                get_settings(&ah).command_filter_applies_to_hotkey(post_process);
                             if post_process || will_run_filter {
                                 if use_streaming_overlay {
                                     tm.emit_stream_working(StreamWorkKind::Polishing);
