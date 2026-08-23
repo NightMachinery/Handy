@@ -14,7 +14,7 @@ bun install
 
 ## Build command (DMG)
 
-From `/Users/evar/code/misc/Handy`:
+From the repository root:
 
 ```bash
 mkdir -p /tmp/clang-module-cache /tmp/fakebin
@@ -45,12 +45,15 @@ bun run tauri build --bundles dmg
 
 ## Output
 
-- DMG: `/Users/evar/code/misc/Handy/src-tauri/target/release/bundle/dmg/Handy_<version>_aarch64.dmg`
+- DMG: `src-tauri/target/release/bundle/dmg/Handy_<version>_aarch64.dmg`
+
+To install the app without building a DMG, use `--bundles app` instead and copy
+`src-tauri/target/release/bundle/macos/Handy.app` into `/Applications`.
 
 Optional checksum:
 
 ```bash
-shasum -a 256 /Users/evar/code/misc/Handy/src-tauri/target/release/bundle/dmg/Handy_<version>_aarch64.dmg
+shasum -a 256 src-tauri/target/release/bundle/dmg/Handy_<version>_aarch64.dmg
 ```
 
 ## Notes
