@@ -1,5 +1,6 @@
 use crate::audio_toolkit::{apply_custom_words, filter_transcription_output};
 use crate::managers::audio::AudioRecordingManager;
+use crate::managers::engine_lease::{EngineLease, EngineLeaseGate, LeaseError, LeaseOwner};
 use crate::managers::model::{EngineType, ModelManager};
 use crate::settings::{
     get_settings, AppSettings, ModelUnloadTimeout, OrtAcceleratorSetting,
@@ -35,6 +36,14 @@ use transcribe_rs::{
 
 const STREAM_PERF_LOG_INTERVAL: Duration = Duration::from_secs(5);
 const STREAM_FINALIZE_REPLY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long a batch transcription waits for the engine before giving up.
+///
+/// Generous on purpose: the alternative to waiting is losing the user's
+/// dictation, and the only thing that can be ahead of it is one in-flight job
+/// (batch waiters take priority over queued CLI jobs). The bound exists so a
+/// leaked lease surfaces as an error rather than a permanent hang.
+const BATCH_LEASE_WAIT: Duration = Duration::from_secs(30 * 60);
 
 fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(message) = payload.downcast_ref::<&str>() {
@@ -210,7 +219,6 @@ impl Drop for LoadingGuard {
 struct StreamWorkerGuard {
     worker_id: u64,
     active_stream_worker: Arc<AtomicU64>,
-    active_engine_lease: Arc<AtomicU64>,
     stream_active: Arc<AtomicBool>,
 }
 
@@ -219,12 +227,6 @@ impl Drop for StreamWorkerGuard {
         if self.active_stream_worker.load(Ordering::Acquire) == self.worker_id {
             self.stream_active.store(false, Ordering::Release);
         }
-        let _ = self.active_engine_lease.compare_exchange(
-            self.worker_id,
-            0,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        );
         let _ = self.active_stream_worker.compare_exchange(
             self.worker_id,
             0,
@@ -263,10 +265,11 @@ pub struct TranscriptionManager {
     /// yet. This prevents a second worker from starting after finalize/cancel
     /// closes the router but before the first worker has fully exited.
     active_stream_worker: Arc<AtomicU64>,
-    /// Nonzero while the streaming worker has taken the engine out of `engine`.
-    /// `is_model_loaded()` consults this so the model still reports "loaded"
-    /// while the worker holds it.
-    active_engine_lease: Arc<AtomicU64>,
+    /// Held while someone has taken the engine out of `engine` — the streaming
+    /// worker, a batch transcription, or a CLI job. `is_model_loaded()` consults
+    /// it so the model still reports "loaded" while it is in use, and every
+    /// engine user acquires it so concurrent callers queue instead of failing.
+    engine_lease: Arc<EngineLeaseGate>,
 }
 
 impl TranscriptionManager {
@@ -286,7 +289,7 @@ impl TranscriptionManager {
             stream_active: Arc::new(AtomicBool::new(false)),
             next_stream_worker_id: Arc::new(AtomicU64::new(1)),
             active_stream_worker: Arc::new(AtomicU64::new(0)),
-            active_engine_lease: Arc::new(AtomicU64::new(0)),
+            engine_lease: Arc::new(EngineLeaseGate::new()),
         };
 
         // Start the idle watcher
@@ -372,9 +375,33 @@ impl TranscriptionManager {
     }
 
     pub fn is_model_loaded(&self) -> bool {
-        // The engine may be leased out to the streaming worker (taken out of
-        // the mutex). It's still loaded, just in use, so report true.
-        self.lock_engine().is_some() || self.active_engine_lease.load(Ordering::Acquire) != 0
+        // The engine may be leased out (taken out of the mutex) by the streaming
+        // worker, a batch transcription, or a CLI job. It's still loaded, just in
+        // use, so report true.
+        self.lock_engine().is_some() || self.engine_lease.busy_owner().is_some()
+    }
+
+    /// Who currently holds the transcription engine, if anyone.
+    pub fn engine_busy(&self) -> Option<LeaseOwner> {
+        self.engine_lease.busy_owner()
+    }
+
+    /// Claim the engine if it is free, without waiting. Used by the streaming
+    /// worker, which falls back to batch transcription rather than queueing.
+    pub fn try_lease_engine(&self, owner: LeaseOwner) -> Result<EngineLease, LeaseError> {
+        self.engine_lease.try_acquire(owner)
+    }
+
+    /// Claim the engine, waiting for it to free up. `timeout` of `None` waits
+    /// indefinitely; `cancel` is polled while waiting so an abandoned job stops
+    /// occupying its place in the queue.
+    pub fn lease_engine_wait(
+        &self,
+        owner: LeaseOwner,
+        timeout: Option<Duration>,
+        cancel: Option<&Arc<AtomicBool>>,
+    ) -> Result<EngineLease, LeaseError> {
+        self.engine_lease.acquire(owner, timeout, cancel)
     }
 
     /// Accelerator changes should not disturb the current transcription. Mark
@@ -780,6 +807,18 @@ impl TranscriptionManager {
             warn!("start_stream called while a stream worker is already active");
             return;
         }
+        // Streaming needs the engine to itself. If something else already has it
+        // (typically a CLI job), don't open the router or spawn a worker that
+        // would only drain and exit — leave the recording to the batch path,
+        // which queues for the engine instead of failing.
+        if let Some(owner) = self.engine_busy() {
+            info!(
+                "Live preview skipped: the engine is busy with a {}; \
+                 this recording will use batch transcription",
+                owner
+            );
+            return;
+        }
         let worker_id = self.next_stream_worker_id.fetch_add(1, Ordering::Relaxed);
         if self
             .active_stream_worker
@@ -800,7 +839,6 @@ impl TranscriptionManager {
         let _worker = StreamWorkerGuard {
             worker_id,
             active_stream_worker: Arc::clone(&self.active_stream_worker),
-            active_engine_lease: Arc::clone(&self.active_engine_lease),
             stream_active: Arc::clone(&self.stream_active),
         };
 
@@ -819,16 +857,18 @@ impl TranscriptionManager {
         // structurally excluding any concurrent batch transcription (which
         // transcribe-cpp's compute_lock would refuse anyway). Returned when the
         // worker exits, or dropped if the model was switched/unloaded mid-stream.
-        if self
-            .active_engine_lease
-            .compare_exchange(0, worker_id, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            warn!("Live preview: another worker already holds the transcription engine");
-            self.router.clear();
-            drain_until_finalize(rx);
-            return;
-        }
+        //
+        // Streaming never queues: if something else holds the engine, the caller
+        // falls back to batch transcription, which *does* wait.
+        let engine_lease = match self.try_lease_engine(LeaseOwner::Stream) {
+            Ok(lease) => lease,
+            Err(err) => {
+                warn!("Live preview: {}", err);
+                self.router.clear();
+                drain_until_finalize(rx);
+                return;
+            }
+        };
         let mut engine = match self.lock_engine().take() {
             Some(e) => e,
             None => {
@@ -837,12 +877,7 @@ impl TranscriptionManager {
                      falling back to batch transcription",
                     model_id
                 );
-                let _ = self.active_engine_lease.compare_exchange(
-                    worker_id,
-                    0,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                );
+                drop(engine_lease);
                 self.router.clear();
                 drain_until_finalize(rx);
                 return;
@@ -1028,8 +1063,9 @@ impl TranscriptionManager {
         if let (Some(reply), Some(result)) = (finalize_reply, finalize_result) {
             let _ = reply.send(result);
         }
-        // `_worker` drops here, clearing this worker's active/lease flags after
-        // the engine has been returned to the pool.
+        // `engine_lease` and `_worker` drop here, releasing the engine and
+        // clearing this worker's active flag after the engine has been returned
+        // to the pool.
     }
 
     /// Return the leased engine to the mutex, unless the model was switched or
@@ -1109,7 +1145,23 @@ impl TranscriptionManager {
         .emit(&self.app_handle);
     }
 
+    /// Transcribe a 16 kHz mono buffer, waiting for the engine if it is in use.
+    ///
+    /// Blocks for up to [`BATCH_LEASE_WAIT`] while a live preview or a CLI job
+    /// holds the engine, rather than failing the way a bare concurrent call
+    /// used to.
     pub fn transcribe(&self, audio: Vec<f32>) -> Result<String> {
+        let lease = self.lease_engine_wait(LeaseOwner::Batch, Some(BATCH_LEASE_WAIT), None)?;
+        self.transcribe_with_lease(&lease, audio)
+    }
+
+    /// Transcribe on an engine the caller has already leased.
+    ///
+    /// The lease is a proof of exclusive access, not an argument: holding it
+    /// across the call is what keeps two transcriptions from racing for the
+    /// engine. Callers that just want a transcript should use
+    /// [`transcribe`](Self::transcribe).
+    pub fn transcribe_with_lease(&self, _lease: &EngineLease, audio: Vec<f32>) -> Result<String> {
         #[cfg(debug_assertions)]
         if std::env::var("HANDY_FORCE_TRANSCRIPTION_FAILURE").is_ok() {
             return Err(anyhow::anyhow!(
