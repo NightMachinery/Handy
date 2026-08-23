@@ -81,6 +81,17 @@ pub enum ServerFrame {
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
         elapsed_ms: u64,
+        /// Fraction complete in `0.0..=1.0`, when the engine reports one.
+        /// Absent for batch transcription, which is a single opaque call — an
+        /// estimate there would be a fabricated number, not a measurement.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fraction: Option<f64>,
+    },
+    /// Text decoded so far, while a streaming family is running.
+    Partial {
+        job_id: String,
+        committed: String,
+        tentative: String,
     },
     /// Terminal success frame.
     Result { job_id: String, body: ResultBody },
@@ -130,6 +141,14 @@ pub struct TranscribeRequest {
     /// Send `Progress` frames while the job runs.
     #[serde(default = "default_true")]
     pub want_progress: bool,
+    /// Use the streaming API when the loaded model supports it, which yields a
+    /// real completion fraction and partial text. Batch is used regardless when
+    /// the model cannot stream.
+    #[serde(default = "default_true")]
+    pub allow_streaming: bool,
+    /// Send `Partial` frames as text is decoded.
+    #[serde(default)]
+    pub want_partials: bool,
 }
 
 fn default_true() -> bool {
@@ -262,6 +281,10 @@ pub struct TranscriptBody {
     /// True when the model was not resident and had to be loaded for this job,
     /// which usually means the unload timeout is set to Immediately.
     pub cold_load: bool,
+    /// Whether the streaming API produced this text rather than the batch call.
+    /// Streaming families commit incrementally, so the two can differ slightly
+    /// for the same audio.
+    pub streamed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub history_id: Option<i64>,
     pub pasted: bool,
@@ -431,6 +454,7 @@ mod tests {
                 transcribe_ms: 1234,
                 rtf: 4.2,
                 cold_load: false,
+                streamed: true,
                 history_id: None,
                 pasted: false,
             })),
@@ -462,6 +486,8 @@ mod tests {
             paste: false,
             wait_policy: WaitPolicy::default(),
             want_progress: true,
+            allow_streaming: true,
+            want_partials: false,
         }));
 
         let mut buf = Vec::new();
@@ -484,6 +510,79 @@ mod tests {
             ClientFrame::Cancel
         ));
         assert!(read_frame::<_, ClientFrame>(&mut reader).unwrap().is_none());
+    }
+
+    /// A progress frame from a server that predates measured fractions must
+    /// still parse — this is the backward-compatibility rule in action.
+    #[test]
+    fn progress_without_a_fraction_still_parses() {
+        let mut buf =
+            br#"{"type":"progress","job_id":"j","stage":"transcribing","elapsed_ms":5000}"#
+                .to_vec();
+        buf.push(b'\n');
+        let mut reader = BufReader::new(Cursor::new(buf));
+        let frame: ServerFrame = read_frame(&mut reader).unwrap().unwrap();
+        match frame {
+            ServerFrame::Progress {
+                fraction, stage, ..
+            } => {
+                assert!(fraction.is_none());
+                assert_eq!(stage, Stage::Transcribing);
+            }
+            other => panic!("wrong frame: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn progress_with_a_fraction_round_trips() {
+        let frame = ServerFrame::Progress {
+            job_id: "j".into(),
+            stage: Stage::Transcribing,
+            message: None,
+            elapsed_ms: 1000,
+            fraction: Some(0.42),
+        };
+        match roundtrip(&frame) {
+            ServerFrame::Progress { fraction, .. } => assert_eq!(fraction, Some(0.42)),
+            other => panic!("wrong frame: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn partial_frame_round_trips() {
+        let frame = ServerFrame::Partial {
+            job_id: "j".into(),
+            committed: "hello there".into(),
+            tentative: "world".into(),
+        };
+        match roundtrip(&frame) {
+            ServerFrame::Partial {
+                committed,
+                tentative,
+                ..
+            } => {
+                assert_eq!(committed, "hello there");
+                assert_eq!(tentative, "world");
+            }
+            other => panic!("wrong frame: {other:?}"),
+        }
+    }
+
+    /// A request from a client that predates streaming must default to the
+    /// behaviour a new server would pick anyway.
+    #[test]
+    fn streaming_fields_default_for_an_older_client() {
+        let mut buf =
+            br#"{"type":"transcribe","audio":{"kind":"path","path":"/tmp/a.wav"}}"#.to_vec();
+        buf.push(b'\n');
+        let mut reader = BufReader::new(Cursor::new(buf));
+        match read_frame::<_, ClientFrame>(&mut reader).unwrap().unwrap() {
+            ClientFrame::Transcribe(req) => {
+                assert!(req.allow_streaming, "streaming should default on");
+                assert!(!req.want_partials, "partials should default off");
+            }
+            other => panic!("wrong frame: {other:?}"),
+        }
     }
 
     #[test]

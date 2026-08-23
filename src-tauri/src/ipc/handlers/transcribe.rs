@@ -105,9 +105,45 @@ pub fn handle(
     // ----- transcribe -------------------------------------------------------
     job.progress(Stage::Transcribing, None);
     let start = Instant::now();
-    let raw_text = transcription
-        .transcribe_with_lease(&lease, samples.clone())
-        .map_err(|e| HandlerError::new(ErrorCode::TranscriptionFailed, e.to_string()))?;
+
+    // Streaming first when the model supports it: it is the only path that can
+    // report a measured completion fraction, and its feed loop is ours, so
+    // cancellation lands within a chunk instead of after the whole inference.
+    let mut streamed = false;
+    let mut raw_text = None;
+    if request.allow_streaming {
+        let want_partials = request.want_partials;
+        let streaming = transcription
+            .transcribe_streaming_with_lease(&lease, &samples, &job.cancel, |progress| {
+                job.progress_with_fraction(Stage::Transcribing, None, progress.fraction());
+                if want_partials {
+                    job.partial(&progress.committed_text, &progress.tentative_text);
+                }
+            })
+            .map_err(|e| {
+                let code = if job.is_cancelled() {
+                    ErrorCode::Cancelled
+                } else {
+                    ErrorCode::TranscriptionFailed
+                };
+                HandlerError::new(code, e.to_string())
+            })?;
+        if let Some(text) = streaming {
+            streamed = true;
+            raw_text = Some(text);
+        }
+    }
+
+    // Batch fallback: the model cannot stream, or streaming declined to start.
+    let raw_text = match raw_text {
+        Some(text) => text,
+        None => {
+            job.check_cancelled()?;
+            transcription
+                .transcribe_with_lease(&lease, samples.clone())
+                .map_err(|e| HandlerError::new(ErrorCode::TranscriptionFailed, e.to_string()))?
+        }
+    };
     let transcribe_ms = start.elapsed().as_millis() as u64;
     let backend = transcription.current_backend();
 
@@ -181,6 +217,7 @@ pub fn handle(
         transcribe_ms,
         rtf,
         cold_load: needs_load,
+        streamed,
         history_id,
         pasted,
     })))

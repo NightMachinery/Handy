@@ -294,6 +294,8 @@ fn run_transcribe(args: TranscribeArgs, original: CliArgs) -> Dispatch {
             IfBusy::Wait | IfBusy::Local => WaitPolicy::Wait { timeout_ms: None },
         },
         want_progress: true,
+        allow_streaming: !args.no_stream,
+        want_partials: args.partials || args.ndjson,
     }));
 
     if let Err(e) = session.send_with_audio(&request, &payload) {
@@ -307,6 +309,10 @@ fn run_transcribe(args: TranscribeArgs, original: CliArgs) -> Dispatch {
 fn stream_transcription(session: &mut Session, args: &TranscribeArgs, progress: bool) -> i32 {
     let watchdog = idle_watchdog(&args.common);
     let interrupts = crate::ipc::client::spawn_interrupt_watcher();
+    let mut renderer = ProgressRenderer::new(
+        std::io::IsTerminal::is_terminal(&std::io::stderr()),
+        args.partials,
+    );
 
     let frame = {
         // Ctrl-C cancels the job rather than orphaning it. Even without this,
@@ -327,7 +333,7 @@ fn stream_transcription(session: &mut Session, args: &TranscribeArgs, progress: 
                     if args.ndjson {
                         print_ndjson(&frame);
                     } else if progress {
-                        print_progress(&frame);
+                        renderer.handle(&frame);
                     }
                     match frame {
                         ServerFrame::Result { .. } | ServerFrame::Error { .. } => {
@@ -340,6 +346,7 @@ fn stream_transcription(session: &mut Session, args: &TranscribeArgs, progress: 
                 }
                 Ok(None) => break,
                 Err(e) => {
+                    renderer.clear();
                     eprintln!("handy: {e:#}");
                     return EXIT_RUNTIME;
                 }
@@ -347,6 +354,9 @@ fn stream_transcription(session: &mut Session, args: &TranscribeArgs, progress: 
         }
         result
     };
+
+    // The transcript is about to go to stdout; leave no half-drawn bar behind.
+    renderer.clear();
 
     let Some(frame) = frame else {
         eprintln!("handy: the connection closed before a result arrived");
@@ -429,22 +439,116 @@ fn print_ndjson(frame: &ServerFrame) {
     }
 }
 
-fn print_progress(frame: &ServerFrame) {
-    if let ServerFrame::Progress {
-        stage,
-        message,
-        elapsed_ms,
-        ..
-    } = frame
-    {
-        let elapsed = Duration::from_millis(*elapsed_ms);
-        match message {
-            Some(message) => eprintln!(
-                "handy: {} ({}) — {message}",
-                stage.label(),
-                format_duration(elapsed)
-            ),
-            None => eprintln!("handy: {} ({})", stage.label(), format_duration(elapsed)),
+/// Renders progress on stderr.
+///
+/// On a terminal it redraws one line in place — a bar once the engine reports a
+/// fraction, a spinner until then. Off a terminal it appends plain lines, which
+/// is what a log or a CI transcript wants.
+struct ProgressRenderer {
+    tty: bool,
+    /// Last measured fraction. Batch heartbeats carry none, and a streaming job
+    /// interleaves them with measured ones, so the last real value is kept
+    /// rather than letting the bar flicker back to indeterminate.
+    fraction: Option<f64>,
+    spinner: usize,
+    /// Width of the last line drawn, so it can be erased cleanly.
+    drawn: usize,
+    partials: bool,
+}
+
+const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
+const BAR_WIDTH: usize = 24;
+
+impl ProgressRenderer {
+    fn new(tty: bool, partials: bool) -> Self {
+        Self {
+            tty,
+            fraction: None,
+            spinner: 0,
+            drawn: 0,
+            partials,
+        }
+    }
+
+    fn handle(&mut self, frame: &ServerFrame) {
+        match frame {
+            ServerFrame::Progress {
+                stage,
+                message,
+                elapsed_ms,
+                fraction,
+                ..
+            } => {
+                if fraction.is_some() {
+                    self.fraction = *fraction;
+                }
+                self.draw(
+                    *stage,
+                    message.as_deref(),
+                    Duration::from_millis(*elapsed_ms),
+                );
+            }
+            ServerFrame::Partial { tentative, .. } if self.partials => {
+                if !tentative.is_empty() {
+                    self.clear();
+                    eprintln!("handy: … {tentative}");
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn draw(&mut self, stage: Stage, message: Option<&str>, elapsed: Duration) {
+        let mut line = String::from("handy: ");
+        match self.fraction {
+            Some(fraction) => {
+                let filled = ((fraction * BAR_WIDTH as f64).round() as usize).min(BAR_WIDTH);
+                line.push('[');
+                line.extend(std::iter::repeat_n('#', filled));
+                line.extend(std::iter::repeat_n('.', BAR_WIDTH - filled));
+                line.push_str(&format!("] {:>3.0}%", fraction * 100.0));
+                line.push_str(&format!("  {}", format_duration(elapsed)));
+                // An ETA is only honest once there is a measured fraction to
+                // extrapolate from, and only once enough of the job has run.
+                if fraction > 0.02 {
+                    let total = elapsed.as_secs_f64() / fraction;
+                    let remaining = (total - elapsed.as_secs_f64()).max(0.0);
+                    line.push_str(&format!(
+                        " (~{} left)",
+                        format_duration(Duration::from_secs_f64(remaining))
+                    ));
+                }
+            }
+            None => {
+                self.spinner = self.spinner.wrapping_add(1);
+                line.push(SPINNER[self.spinner % SPINNER.len()]);
+                line.push(' ');
+                line.push_str(stage.label());
+                line.push_str(&format!(" ({})", format_duration(elapsed)));
+            }
+        }
+        if let Some(message) = message {
+            line.push_str(" — ");
+            line.push_str(message);
+        }
+
+        if self.tty {
+            // Pad to erase whatever the previous, possibly longer, line left.
+            let pad = self.drawn.saturating_sub(line.chars().count());
+            eprint!("\r{}{}", line, " ".repeat(pad));
+            let _ = std::io::stderr().flush();
+            self.drawn = line.chars().count();
+        } else {
+            eprintln!("{line}");
+        }
+    }
+
+    /// Erase the in-place line so following output starts clean.
+    fn clear(&mut self) {
+        if self.tty && self.drawn > 0 {
+            eprint!("\r{}\r", " ".repeat(self.drawn));
+            let _ = std::io::stderr().flush();
+            self.drawn = 0;
         }
     }
 }

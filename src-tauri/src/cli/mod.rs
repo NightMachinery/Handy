@@ -188,6 +188,17 @@ pub struct TranscribeArgs {
     /// Never show progress on stderr.
     #[arg(long, overrides_with = "progress")]
     pub no_progress: bool,
+
+    /// Use the batch engine even when the model can stream. Streaming is the
+    /// default because it is the only path that reports a real completion
+    /// percentage, but it commits text incrementally, so its transcript can
+    /// differ slightly from `handy -f` for the same audio.
+    #[arg(long)]
+    pub no_stream: bool,
+
+    /// Print text on stderr as it is decoded (streaming models only).
+    #[arg(long)]
+    pub partials: bool,
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]

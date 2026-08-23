@@ -81,6 +81,16 @@ impl JobContext {
     }
 
     pub fn progress(&self, stage: Stage, message: Option<String>) {
+        self.progress_with_fraction(stage, message, None);
+    }
+
+    /// Report progress with a measured completion fraction, where one exists.
+    pub fn progress_with_fraction(
+        &self,
+        stage: Stage,
+        message: Option<String>,
+        fraction: Option<f64>,
+    ) {
         if !self.want_progress {
             return;
         }
@@ -91,6 +101,19 @@ impl JobContext {
                 stage,
                 message,
                 elapsed_ms: self.started.elapsed().as_millis() as u64,
+                fraction,
+            },
+        );
+    }
+
+    /// Emit text decoded so far. Only sent when the client asked for partials.
+    pub fn partial(&self, committed: &str, tentative: &str) {
+        send(
+            &self.out,
+            &ServerFrame::Partial {
+                job_id: self.job_id.clone(),
+                committed: committed.to_string(),
+                tentative: tentative.to_string(),
             },
         );
     }
@@ -493,6 +516,10 @@ fn spawn_heartbeat(job: &JobContext) -> Arc<AtomicBool> {
                     stage: Stage::Transcribing,
                     message,
                     elapsed_ms: started.elapsed().as_millis() as u64,
+                    // The heartbeat knows no fraction. A streaming job sends its
+                    // own measured ones alongside; the client keeps the last it
+                    // saw so the two do not fight over the display.
+                    fraction: None,
                 },
             );
         }

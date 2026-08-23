@@ -1,3 +1,4 @@
+use crate::audio_toolkit::constants::WHISPER_SAMPLE_RATE;
 use crate::audio_toolkit::{apply_custom_words, filter_transcription_output};
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::engine_lease::{EngineLease, EngineLeaseGate, LeaseError, LeaseOwner};
@@ -36,6 +37,70 @@ use transcribe_rs::{
 
 const STREAM_PERF_LOG_INTERVAL: Duration = Duration::from_secs(5);
 const STREAM_FINALIZE_REPLY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Audio handed to a streaming family per feed when transcribing a file.
+/// Large enough to keep per-call overhead down, small enough that progress and
+/// cancellation stay responsive.
+const STREAM_FILE_CHUNK: usize = WHISPER_SAMPLE_RATE as usize / 2;
+
+/// Floor on how often file streaming reports progress. Every report crosses a
+/// socket, and a long file produces hundreds of feeds.
+const STREAM_PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Incremental state reported while streaming a file.
+#[derive(Debug, Clone)]
+pub struct StreamProgress {
+    /// Audio the engine reports as committed, in seconds.
+    pub committed_secs: f64,
+    /// Total duration of the buffer being transcribed.
+    pub total_secs: f64,
+    /// Wall-clock time since streaming began.
+    pub elapsed: Duration,
+    pub committed_text: String,
+    pub tentative_text: String,
+}
+
+impl StreamProgress {
+    /// Fraction complete in `0.0..=1.0`, or `None` when the total is unknown.
+    ///
+    /// Clamped because a family may report slightly more committed audio than
+    /// was fed once its internal padding is flushed, and a bar past 100% reads
+    /// as a bug.
+    pub fn fraction(&self) -> Option<f64> {
+        (self.total_secs > 0.0).then(|| (self.committed_secs / self.total_secs).clamp(0.0, 1.0))
+    }
+}
+
+#[cfg(test)]
+mod stream_progress_tests {
+    use super::*;
+
+    fn progress(committed: f64, total: f64) -> StreamProgress {
+        StreamProgress {
+            committed_secs: committed,
+            total_secs: total,
+            elapsed: Duration::from_secs(1),
+            committed_text: String::new(),
+            tentative_text: String::new(),
+        }
+    }
+
+    #[test]
+    fn fraction_is_the_committed_share() {
+        assert_eq!(progress(30.0, 120.0).fraction(), Some(0.25));
+        assert_eq!(progress(0.0, 120.0).fraction(), Some(0.0));
+    }
+
+    #[test]
+    fn fraction_is_clamped_to_one() {
+        assert_eq!(progress(130.0, 120.0).fraction(), Some(1.0));
+    }
+
+    #[test]
+    fn fraction_is_absent_without_a_total() {
+        assert_eq!(progress(30.0, 0.0).fraction(), None);
+    }
+}
 
 /// How long a batch transcription waits for the engine before giving up.
 ///
@@ -1149,6 +1214,165 @@ impl TranscriptionManager {
             tentative: tentative.to_string(),
         }
         .emit(&self.app_handle);
+    }
+
+    /// Transcribe a buffer through the streaming API, reporting real progress.
+    ///
+    /// The batch path is a single opaque call into the engine, so it can report
+    /// nothing until it finishes. Streaming families report `audio_committed_ms`
+    /// on every feed, which — against a known total — is a genuine percentage,
+    /// and it makes cancellation prompt because the feed loop is ours.
+    ///
+    /// Returns `Ok(None)` when the loaded model cannot stream, so the caller
+    /// falls back to [`transcribe_with_lease`](Self::transcribe_with_lease).
+    ///
+    /// Deliberately independent of [`StreamRouter`] and `run_stream_worker`:
+    /// those are wired to the microphone and to the recording overlay, and a
+    /// headless job has no business opening the router the mic feeds or
+    /// flashing the overlay. Nothing here touches the live dictation path.
+    pub fn transcribe_streaming_with_lease(
+        &self,
+        _lease: &EngineLease,
+        audio: &[f32],
+        cancel: &Arc<AtomicBool>,
+        mut on_progress: impl FnMut(StreamProgress),
+    ) -> Result<Option<String>> {
+        if audio.is_empty() {
+            return Ok(Some(String::new()));
+        }
+        self.touch_activity();
+
+        // Wait out any in-flight load, exactly as the batch path does.
+        {
+            let mut is_loading = self.is_loading.lock().unwrap_or_else(|e| e.into_inner());
+            while *is_loading {
+                is_loading = self
+                    .loading_condvar
+                    .wait(is_loading)
+                    .unwrap_or_else(|e| e.into_inner());
+            }
+        }
+
+        let model_id = self.get_current_model().unwrap_or_default();
+        let mut engine = match self.lock_engine().take() {
+            Some(engine) => engine,
+            None => return Err(anyhow::anyhow!("Model is not loaded for transcription.")),
+        };
+
+        let (supports_streaming, supports_translate, languages) = match &engine {
+            LoadedEngine::TranscribeCpp(session) => {
+                let caps = session.model().capabilities();
+                (
+                    caps.supports_streaming,
+                    caps.supports_translate,
+                    caps.languages,
+                )
+            }
+            // ONNX engines have no streaming API at all.
+            _ => (false, false, Vec::new()),
+        };
+        if !supports_streaming {
+            self.return_engine(engine, &model_id);
+            return Ok(None);
+        }
+
+        let settings = get_settings(&self.app_handle);
+        let effective_language =
+            effective_language_for_model(&settings, self.model_manager.as_ref(), &model_id);
+        let run_plan = transcribe_cpp_run_plan(
+            settings.translate_to_english,
+            &effective_language,
+            &languages,
+            supports_translate,
+        );
+        let run_options = RunOptions {
+            task: run_plan.task,
+            language: run_plan.language,
+            target_language: run_plan.target_language,
+            ..Default::default()
+        };
+
+        let total_secs = audio.len() as f64 / WHISPER_SAMPLE_RATE as f64;
+        let started = Instant::now();
+
+        // A panicking engine must not be put back, mirroring the batch path.
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            let session = match &mut engine {
+                LoadedEngine::TranscribeCpp(session) => session,
+                _ => return Ok(None),
+            };
+            let mut stream = match session.stream(&run_options, &StreamOptions::default()) {
+                Ok(stream) => stream,
+                Err(e) => {
+                    warn!("Streaming transcription could not begin ({e}); using batch instead");
+                    return Ok(None);
+                }
+            };
+
+            let mut last_report = Instant::now();
+            for chunk in audio.chunks(STREAM_FILE_CHUNK) {
+                if cancel.load(Ordering::Relaxed) {
+                    stream.reset();
+                    return Err(anyhow::anyhow!("cancelled"));
+                }
+                match stream.feed(chunk) {
+                    Ok(update) => {
+                        // Throttle: a 10-minute file is hundreds of feeds, and
+                        // every report crosses a socket.
+                        if last_report.elapsed() >= STREAM_PROGRESS_INTERVAL {
+                            last_report = Instant::now();
+                            let text = stream.text();
+                            on_progress(StreamProgress {
+                                committed_secs: update.audio_committed_ms as f64 / 1000.0,
+                                total_secs,
+                                elapsed: started.elapsed(),
+                                committed_text: text.committed.clone(),
+                                tentative_text: text.tentative.clone(),
+                            });
+                        }
+                    }
+                    Err(e) => warn!("stream feed failed: {e}"),
+                }
+                self.touch_activity();
+            }
+
+            match stream.finalize() {
+                // After finalize the committed prefix holds the whole text;
+                // display() = committed + tentative is the safe read.
+                Ok(_) => Ok(Some(stream.text().display())),
+                Err(e) => {
+                    warn!("stream finalize failed ({e}); using batch instead");
+                    Ok(None)
+                }
+            }
+        }));
+
+        match outcome {
+            Ok(result) => {
+                self.return_engine(engine, &model_id);
+                let result = result?;
+                if let Some(text) = result {
+                    let filtered = post_process_transcription_text(text, &settings, false);
+                    self.maybe_unload_immediately("streaming file transcription");
+                    Ok(Some(filtered))
+                } else {
+                    Ok(None)
+                }
+            }
+            Err(payload) => {
+                // Do not return a panicked engine to the pool.
+                let message = panic_payload_message(payload.as_ref());
+                error!("Streaming engine panicked: {message}. Model has been unloaded.");
+                *self
+                    .current_model_id
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = None;
+                Err(anyhow::anyhow!(
+                    "Transcription engine panicked: {message}. The model has been unloaded \
+                     and will reload on next attempt."
+                ))
+            }
+        }
     }
 
     /// Transcribe a 16 kHz mono buffer, waiting for the engine if it is in use.

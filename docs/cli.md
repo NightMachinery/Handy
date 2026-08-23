@@ -73,7 +73,55 @@ keep working byte for byte.
   transcription is expected and fine.
 - `--progress` / `--no-progress` — force progress on stderr on or off. The
   default is on when stderr is a terminal.
+- `--no-stream` — use the batch engine even when the model can stream. See
+  below for why you might.
+- `--partials` — print text on stderr as it is decoded (streaming models only).
 - `-q/--quiet` — suppress progress and notes on stderr.
+
+## Progress
+
+On a terminal, progress is drawn in place on one stderr line. What it can show
+depends on which engine path runs.
+
+For a **streaming-capable** model the engine reports `audio_committed_ms` on
+every feed, and the client already knows the file's exact duration, so the
+percentage is measured rather than guessed:
+
+```
+handy: [##########..............]  42%  3m18s (~4m32s left)
+```
+
+For a **batch** model there is no bar, because there is nothing honest to put
+in one. `transcribe-cpp` exposes no progress callback — inference is a single
+opaque blocking call — so the client shows a spinner and elapsed time instead:
+
+```
+handy: / transcribing (3m18s)
+```
+
+Extrapolating a percentage from real-time-factor would be possible, but it
+would be a fabricated number that sits near the end for a long time. A bar that
+lies is worse than no bar.
+
+When stderr is not a terminal, progress appends plain lines instead of
+redrawing, which is what a log or CI transcript wants. `--ndjson` carries every
+frame, including `fraction` and `partial`, for scripts that want to render
+their own.
+
+### Streaming vs batch
+
+Streaming is used by default whenever the loaded model supports it, because it
+is the only path that yields a real percentage, and because its feed loop
+belongs to the CLI — so cancellation lands within half a second rather than
+after the whole inference.
+
+The trade-off is that streaming families commit text incrementally, so the
+transcript can differ slightly from what the batch path — and therefore
+`handy -f` — produces for the same audio. Pass `--no-stream` when you want the
+batch result specifically. `--json` reports which path ran as `streamed`.
+
+Models without streaming support use batch regardless; there is nothing to
+opt into.
 
 ## Output conventions
 
@@ -136,17 +184,20 @@ the contention entirely by using a separate process and its own model copy.
 Ctrl-C cancels the job and exits. Killing the client works too — the server
 notices the disconnect and stops.
 
-One limitation today: an inference already in flight is not interrupted.
+On the **streaming** path, cancellation is prompt: the feed loop belongs to the
+CLI, so it stops at the next half-second chunk.
+
+On the **batch** path, an inference already in flight is not interrupted.
 Cancellation is honoured while queued, while waiting for the engine, between
 stages, and after inference completes (the result is discarded), but the engine
-call itself runs to completion before the job ends.
+call itself runs to completion first.
 
-That is a gap in Handy, not in the engine. `transcribe-cpp` already exposes
-`Session::set_cancel_token`, and Handy currently installs one nowhere; wiring
-it in would make cancellation immediate for transcribe-cpp (GGUF) models whose
-family advertises `Feature::Cancellation`. The ONNX engines behind
-`transcribe-rs` expose no cancellation at all, so for those the current
-behaviour is the ceiling.
+That last part is a gap in Handy, not in the engine. `transcribe-cpp` already
+exposes `Session::set_cancel_token`, and Handy installs one nowhere; wiring it
+in would make batch cancellation immediate for GGUF models whose family
+advertises `Feature::Cancellation`. The ONNX engines behind `transcribe-rs`
+expose no cancellation at all, so for those the current behaviour is the
+ceiling.
 
 ## Audio formats
 
