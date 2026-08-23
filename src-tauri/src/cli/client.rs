@@ -286,7 +286,8 @@ fn run_transcribe(args: TranscribeArgs, original: CliArgs) -> Dispatch {
         source_label: path.file_name().map(|n| n.to_string_lossy().into_owned()),
         model: args.model.clone(),
         restore_model: !args.no_restore_model,
-        post_process: args.post_process,
+        run_pipeline: !args.raw,
+        post_process: args.llm_post_process,
         save_history: args.history && !args.no_history,
         paste: args.paste,
         wait_policy: match args.if_busy {
@@ -731,13 +732,19 @@ mod tests {
 
     #[test]
     fn a_bare_path_keeps_its_trailing_flags() {
-        let args = parse(&["handy", "rec.wav", "--json", "--post-process", "--paste"]);
+        let args = parse(&[
+            "handy",
+            "rec.wav",
+            "--json",
+            "--llm-post-process",
+            "--paste",
+        ]);
         let command = resolve_bare(args.command.unwrap()).expect("should re-parse");
         match command {
             Command::Transcribe(t) => {
                 assert_eq!(t.file, PathBuf::from("rec.wav"));
                 assert!(t.common.json);
-                assert!(t.post_process);
+                assert!(t.llm_post_process);
                 assert!(t.paste);
                 assert!(!t.history, "history must be opt-in");
             }
@@ -817,6 +824,56 @@ mod tests {
         assert_eq!(rewritten.transcribe_file, Some(PathBuf::from("a.wav")));
         assert_eq!(rewritten.model.as_deref(), Some("m"));
         assert!(rewritten.command.is_none(), "must not re-enter client mode");
+    }
+
+    /// Three distinct output modes, and the default must match what a
+    /// dictation would have produced for the same audio.
+    #[test]
+    fn output_pipeline_has_three_modes() {
+        let default = parse(&["handy", "a.wav"]);
+        let Some(Command::Transcribe(t)) = resolve_bare(default.command.unwrap()).ok() else {
+            panic!("expected transcribe");
+        };
+        assert!(!t.llm_post_process, "LLM must be opt-in");
+        assert!(!t.raw, "pipeline runs by default, like a dictation");
+
+        let llm = parse(&["handy", "transcribe", "a.wav", "--llm-post-process"]);
+        match llm.command {
+            Some(Command::Transcribe(t)) => assert!(t.llm_post_process && !t.raw),
+            other => panic!("wrong command: {other:?}"),
+        }
+
+        let raw = parse(&["handy", "transcribe", "a.wav", "--raw"]);
+        match raw.command {
+            Some(Command::Transcribe(t)) => assert!(t.raw && !t.llm_post_process),
+            other => panic!("wrong command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn raw_and_llm_post_process_are_mutually_exclusive() {
+        assert!(
+            CliArgs::try_parse_from([
+                "handy",
+                "transcribe",
+                "a.wav",
+                "--raw",
+                "--llm-post-process"
+            ])
+            .is_err(),
+            "asking for both an untouched transcript and an LLM-rewritten one is incoherent"
+        );
+    }
+
+    /// The flag was briefly spelled --post-process before the LLM step was
+    /// split out; keep that spelling working.
+    #[test]
+    fn the_old_post_process_spelling_still_parses() {
+        let args = parse(&["handy", "transcribe", "a.wav", "--post-process"]);
+        match args.command {
+            Some(Command::Transcribe(t)) => assert!(t.llm_post_process),
+            other => panic!("wrong command: {other:?}"),
+        }
     }
 
     #[test]

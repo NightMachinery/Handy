@@ -155,13 +155,18 @@ pub fn handle(
     job.check_cancelled()?;
 
     // ----- post-process, save, paste ----------------------------------------
+    // The same pipeline a dictation runs: Chinese variant conversion and the
+    // configured command filter, with the LLM step gated separately. Skipping
+    // it entirely would silently give the CLI different output than the hotkey
+    // for identical audio.
     let mut post_process_applied = false;
-    let (final_text, post_processed_text, post_process_prompt) = if request.post_process {
+    let pipeline_ran = request.run_pipeline || request.post_process;
+    let (final_text, post_processed_text, post_process_prompt) = if pipeline_ran {
         job.progress(Stage::PostProcessing, None);
         let processed = tauri::async_runtime::block_on(process_transcription_output(
             &job.ctx.app,
             &raw_text,
-            true,
+            request.post_process,
         ));
         post_process_applied = processed.post_processed_text.is_some();
         (
@@ -207,6 +212,7 @@ pub fn handle(
     Ok(ResultBody::Transcript(Box::new(TranscriptBody {
         text: final_text,
         raw_text,
+        pipeline_ran,
         post_processed: request.post_process,
         post_process_applied,
         model: wanted,

@@ -48,9 +48,9 @@ keep working byte for byte.
   and post-processed text. Nothing else is printed to stdout.
 - `--ndjson` — every protocol frame as it arrives, one JSON object per line,
   terminal frame last. Useful when a script wants progress.
-- `--post-process` — run the app's post-processing pipeline (Chinese variant
-  conversion, the command filter, and the LLM). This makes a network call to
-  whichever provider you have configured.
+- `--llm-post-process` — additionally run LLM post-processing, using your
+  configured provider. Makes a network call. See "Output pipeline" below.
+- `--raw` — print what the engine produced, with no pipeline at all.
 - `--paste` — inject the transcript into the focused window. Off by default,
   and worth thinking about before using: the focused window is usually the
   terminal you just typed the command into.
@@ -122,6 +122,40 @@ batch result specifically. `--json` reports which path ran as `streamed`.
 
 Models without streaming support use batch regardless; there is nothing to
 opt into.
+
+## Output pipeline
+
+A dictation does not paste what the engine emitted. It runs the transcript
+through Chinese variant conversion and, if you have one configured, your
+command filter — and only then, optionally, an LLM. The CLI does the same, so
+`handy file.wav` gives you what dictating that audio would have given you.
+
+Three modes:
+
+```
+handy file.wav                       conversion + command filter (default)
+handy file.wav --llm-post-process    the above, plus your LLM provider
+handy file.wav --raw                 exactly what the engine produced
+```
+
+The split matters because the command filter and the LLM are independent
+things. The filter is a local program of yours with a scope setting that
+already distinguishes plain transcription from post-processed; the LLM is a
+network call that costs money and latency. Folding them into one flag would
+have meant you could not run your own filter without also paying for an LLM
+round trip — which is why `--llm-post-process` is separate rather than the
+single `--post-process` this originally shipped with. That older spelling still
+works as an alias.
+
+`--json` reports all three outcomes separately: `pipeline_ran`,
+`post_processed` (LLM requested), and `post_process_applied` (LLM actually
+produced text — the pipeline falls back to the pre-LLM text when a provider
+fails). `raw_text` always carries the engine's untouched output alongside
+whatever `text` ended up being.
+
+Note that a command filter can legitimately return empty to suppress output,
+and that it runs with your configured timeout. `--raw` is the way to bypass
+both concerns when a script wants the model's output and nothing else.
 
 ## Output conventions
 

@@ -137,10 +137,16 @@ pub struct TranscribeArgs {
     #[command(flatten)]
     pub common: CommonArgs,
 
-    /// Run the app's post-processing (command filter, LLM) over the transcript.
-    /// This makes a network call to your configured provider.
-    #[arg(long)]
-    pub post_process: bool,
+    /// Also run LLM post-processing, using your configured provider. Makes a
+    /// network call. The command filter and variant conversion run either way.
+    #[arg(long, alias = "post-process")]
+    pub llm_post_process: bool,
+
+    /// Print the engine's output untouched: no command filter, no variant
+    /// conversion, no LLM. Useful when a script wants exactly what the model
+    /// produced rather than what a dictation would have pasted.
+    #[arg(long, conflicts_with = "llm_post_process")]
+    pub raw: bool,
 
     /// Paste the transcript into the focused window. Note that the focused
     /// window is usually the terminal you ran this from.

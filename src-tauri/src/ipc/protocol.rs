@@ -125,8 +125,13 @@ pub struct TranscribeRequest {
     /// Restore the previously loaded model after a `model` override.
     #[serde(default = "default_true")]
     pub restore_model: bool,
-    /// Run the app's post-processing pipeline (Chinese conversion, command
-    /// filter, LLM) over the transcript.
+    /// Run the app's output pipeline — Chinese variant conversion and the
+    /// configured command filter — over the transcript, the way a dictation
+    /// does. The LLM step is gated separately by `post_process`.
+    #[serde(default = "default_true")]
+    pub run_pipeline: bool,
+    /// Additionally run the LLM post-processing step. Implies `run_pipeline`,
+    /// and makes a network call to the configured provider.
     #[serde(default)]
     pub post_process: bool,
     /// Record the result in the app's transcription history.
@@ -261,11 +266,13 @@ pub struct TranscriptBody {
     pub text: String,
     /// Text as the engine produced it, before post-processing.
     pub raw_text: String,
-    /// Whether post-processing was requested.
+    /// Whether the output pipeline (conversion + command filter) ran.
+    pub pipeline_ran: bool,
+    /// Whether LLM post-processing was requested.
     pub post_processed: bool,
-    /// Whether post-processing actually changed anything. The pipeline falls
-    /// back to the raw text when a provider fails, so "requested" and "applied"
-    /// are genuinely different answers.
+    /// Whether LLM post-processing actually produced text. The pipeline falls
+    /// back to the pre-LLM text when a provider fails, so "requested" and
+    /// "applied" are genuinely different answers.
     pub post_process_applied: bool,
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -444,6 +451,7 @@ mod tests {
             body: ResultBody::Transcript(Box::new(TranscriptBody {
                 text: text.into(),
                 raw_text: text.into(),
+                pipeline_ran: true,
                 post_processed: false,
                 post_process_applied: false,
                 model: "whisper-large".into(),
@@ -481,6 +489,7 @@ mod tests {
             source_label: Some("rec.wav".into()),
             model: None,
             restore_model: true,
+            run_pipeline: true,
             post_process: false,
             save_history: false,
             paste: false,
