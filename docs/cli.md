@@ -125,7 +125,8 @@ starts normally — audio capture is independent of the engine — but live prev
 is skipped and the transcription queues behind the CLI job. Nothing is lost;
 it just waits. Dictations take priority over _queued_ CLI jobs, so a dictation
 never ends up behind a CLI job that arrived later. A job already running is
-never interrupted, because the engines expose no abort callback.
+never interrupted — see the cancellation note below for why, and what it would
+take to change that.
 
 For a long batch job on a machine you are also dictating on, `--local` avoids
 the contention entirely by using a separate process and its own model copy.
@@ -135,11 +136,17 @@ the contention entirely by using a separate process and its own model copy.
 Ctrl-C cancels the job and exits. Killing the client works too — the server
 notices the disconnect and stops.
 
-One honest limitation: the engine call itself cannot be interrupted.
+One limitation today: an inference already in flight is not interrupted.
 Cancellation is honoured while queued, while waiting for the engine, between
-stages, and after inference completes (the result is discarded), but an
-inference already in flight runs to completion before the job ends. Fixing that
-requires plumbing whisper.cpp's `abort_callback` through `transcribe-cpp`.
+stages, and after inference completes (the result is discarded), but the engine
+call itself runs to completion before the job ends.
+
+That is a gap in Handy, not in the engine. `transcribe-cpp` already exposes
+`Session::set_cancel_token`, and Handy currently installs one nowhere; wiring
+it in would make cancellation immediate for transcribe-cpp (GGUF) models whose
+family advertises `Feature::Cancellation`. The ONNX engines behind
+`transcribe-rs` expose no cancellation at all, so for those the current
+behaviour is the ceiling.
 
 ## Audio formats
 

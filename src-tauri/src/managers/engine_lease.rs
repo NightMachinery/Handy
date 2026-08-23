@@ -17,9 +17,10 @@
 //! Interactive work wins. [`LeaseOwner::Batch`] waiters — real dictations —
 //! register as interactive, and a [`LeaseOwner::Cli`] waiter yields to them
 //! rather than taking a freed engine out from under a user who is waiting on
-//! their own transcript. A running job is never preempted (the engines expose no
-//! abort callback), so this only reorders the queue; [`CLI_STARVATION_CAP`]
-//! bounds how long a CLI job can be held back by a stream of dictations.
+//! their own transcript. A running job is never preempted — Handy installs no
+//! cancel token, so an in-flight inference runs to completion — meaning this
+//! only reorders the queue; [`CLI_STARVATION_CAP`] bounds how long a CLI job
+//! can be held back by a stream of dictations.
 
 use log::warn;
 use serde::{Deserialize, Serialize};
