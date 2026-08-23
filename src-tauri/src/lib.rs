@@ -464,37 +464,23 @@ fn run_headless_transcription(app: &AppHandle, args: &CliArgs) -> i32 {
         return 0;
     };
 
-    // read_wav_samples reads 16-bit int samples and does no validation; the app
-    // only ever saves 16 kHz mono 16-bit PCM, so reject anything else rather than
-    // transcribe garbage / mis-time / mis-decode.
-    match hound::WavReader::open(&wav) {
-        Ok(reader) => {
-            let spec = reader.spec();
-            if spec.sample_rate != 16_000
-                || spec.channels != 1
-                || spec.bits_per_sample != 16
-                || spec.sample_format != hound::SampleFormat::Int
-            {
-                eprintln!(
-                    "error: expected 16 kHz mono 16-bit PCM WAV, got {} Hz / {} ch / {}-bit {:?}",
-                    spec.sample_rate, spec.channels, spec.bits_per_sample, spec.sample_format
-                );
-                return 2;
-            }
-        }
+    // Decodes any WAV bit depth / channel count / sample rate down to the
+    // 16 kHz mono the engines want, and reports the source format so a
+    // surprising conversion is visible rather than silent.
+    let decoded = match crate::audio_toolkit::decode_to_16k_mono(&wav) {
+        Ok(d) => d,
         Err(e) => {
-            eprintln!("error: cannot open {}: {}", wav.display(), e);
-            return 2;
-        }
-    }
-
-    let samples = match crate::audio_toolkit::read_wav_samples(&wav) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: failed to read {}: {}", wav.display(), e);
+            eprintln!("error: {}", e);
             return 2;
         }
     };
+    if !decoded.is_native() {
+        eprintln!(
+            "note: converted {} to 16000 Hz / 1 ch",
+            decoded.source_description()
+        );
+    }
+    let samples = decoded.samples;
     let audio_secs = samples.len() as f64 / 16_000.0;
 
     let tm = app.state::<Arc<TranscriptionManager>>();

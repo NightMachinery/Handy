@@ -1,16 +1,17 @@
+use super::decode::decode_to_16k_mono;
 use anyhow::Result;
 use hound::{WavReader, WavSpec, WavWriter};
 use log::debug;
 use std::path::Path;
 
-/// Read a WAV file and return normalised f32 samples.
+/// Read a WAV file and return normalised 16 kHz mono f32 samples.
+///
+/// Delegates to [`decode_to_16k_mono`], which downmixes and resamples as needed.
+/// This used to pull `i16`s and divide by 32767 with no validation, so any file
+/// that wasn't 16 kHz mono 16-bit — anything not written by Handy itself —
+/// decoded to garbage instead of erroring.
 pub fn read_wav_samples<P: AsRef<Path>>(file_path: P) -> Result<Vec<f32>> {
-    let reader = WavReader::open(file_path.as_ref())?;
-    let samples = reader
-        .into_samples::<i16>()
-        .map(|s| s.map(|v| v as f32 / i16::MAX as f32))
-        .collect::<Result<Vec<f32>, _>>()?;
-    Ok(samples)
+    Ok(decode_to_16k_mono(file_path)?.samples)
 }
 
 /// Verify a WAV file by reading it back and checking the sample count.
