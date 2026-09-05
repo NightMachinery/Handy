@@ -15,7 +15,7 @@ This file provides guidance to AI coding assistants working with code in this re
 # Install dependencies
 bun install
 
-# Run in development mode
+# Run in development mode (on macOS export SDKROOT first, see below)
 bun run tauri dev
 # If cmake error on macOS:
 CMAKE_POLICY_VERSION_MINIMUM=3.5 bun run tauri dev
@@ -28,6 +28,28 @@ bun run dev        # Start Vite dev server
 bun run build      # Build frontend (TypeScript + Vite)
 bun run preview    # Preview built frontend
 ```
+
+**macOS: `SDKROOT` must point at SDK 14.4+.** Every `cargo build`, `cargo
+sweep`, `bun run tauri dev` and `bun run tauri build` on macOS needs:
+
+```bash
+export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX14.4.sdk
+```
+
+Since the v0.9.4 upstream merge, `ort` rc12's prebuilt ONNX Runtime references
+the CoreML classes `MLComputePlan` and `MLOptimizationHints`, which exist only
+in macOS SDK 14.4+. Xcode 15.1 ships SDK 14.2, so when `xcode-select` points at
+that Xcode the build fails — at the *link* step, after everything has already
+compiled, with a message that names neither the SDK nor `ort`:
+
+```
+ld: Undefined symbols: _OBJC_CLASS_$_MLComputePlan
+```
+
+Confirm the active SDK with `xcrun --show-sdk-version`; anything below 14.4
+will fail this way. Installing Command Line Tools 15.3+ provides the 14.4 SDK
+without touching Xcode. Full rationale and the install step:
+[docs/build_mac.md](docs/build_mac.md).
 
 **Linting and Formatting (run before committing):**
 
@@ -225,7 +247,7 @@ Access debug features: `Cmd+Shift+D` (macOS) or `Ctrl+Shift+D` (Windows/Linux)
 
 ## Platform Notes
 
-- **macOS**: Metal acceleration, accessibility permissions required for keyboard shortcuts
+- **macOS**: Metal acceleration, accessibility permissions required for keyboard shortcuts, and `SDKROOT` pinned to SDK 14.4+ for every build (see Development Commands)
 - **Windows**: Vulkan acceleration, code signing
 - **Linux**: OpenBLAS + Vulkan, limited Wayland support, overlay uses GTK layer shell (disable with `HANDY_NO_GTK_LAYER_SHELL=1`)
 
