@@ -194,6 +194,14 @@ it trades idle CPU for lag on every dictation keypress. The loop logs a running
 item count at debug level; if it climbs while the machine is idle, something has
 started polling again. See [docs/idle_cpu_hotkey_bridge.md](docs/idle_cpu_hotkey_bridge.md).
 
+Registration order is also load-bearing. The cancel binding is registered when
+recording starts and unregistered when it stops, and those two calls must arrive
+in that order. They reach the manager through `queue_register`/`queue_unregister`,
+which send without waiting; do not put them back on `tauri::async_runtime::spawn`
+to avoid blocking, because two independent spawns have no order relative to each
+other and the unregister can overtake the register it undoes. That left Escape
+registered after recording ended and broke the next recording's binding.
+
 ## Internationalization (i18n)
 
 All user-facing strings must use i18next translations. ESLint enforces this (no hardcoded strings in JSX).

@@ -35,10 +35,10 @@ Over the uptime above it came to roughly 165 million wakeups, and the thread
 held 25 minutes 12 seconds of the 38 minute total: two thirds of everything the
 process had ever spent, essentially all of it wakeup overhead.
 
-The second is in handy-keys itself: `event_loop` calls
-`listener.recv_timeout(100ms)` purely so it can re-check a `running` flag ten
-times a second. That thread held about four minutes. It is still there; see
-"Still open" below.
+The second is in handy-keys itself: `event_loop` called
+`listener.recv_timeout(100ms)` purely so it could re-check a `running` flag ten
+times a second. That thread held about four minutes. See "The second poll"
+below.
 
 Raising the 10 ms timeout was not a fix. It bounds *hotkey* latency, not command
 latency — `recv_timeout` already returns immediately when a command arrives, and
@@ -65,16 +65,22 @@ blocking `recv()`.
 
 ## The result
 
-Measured on the same machine, idle, with the same `log_level = debug`:
+Measured on the same machine, idle, with the same `log_level = debug`.
 
 Before, the process drew 0.10 s of CPU per 50 s — 0.20% of a core doing
-nothing. After, 0.04 s per 60 s, or 0.067%. That is a 66% reduction, which
-matches the share the polling thread had been measured to hold.
+nothing. Removing the 10 ms poll took that to 0.04 s per 60 s, or 0.067%, a 66%
+cut that matches the share the polling thread had been measured to hold.
+Removing the 100 ms poll as well took it to 0.05 s per 300 s, or 0.017%.
+
+That is a 92% reduction overall, and the remainder is close enough to the 10 ms
+accounting granularity that a longer window is needed to say much more about it.
 
 Per thread, the loop that had accumulated 25 minutes 12 seconds over the old
-instance's lifetime now reports 0:00.00 in `ps -M`. The largest remaining
-consumer is the handy-keys `event_loop` thread, still sitting in
-`semaphore_timedwait_trap` on its 100 ms poll — see "Still open".
+instance's lifetime now reports 0:00.00 in `ps -M`, and no thread in the process
+shows more than a single tick over a 90-second idle window.
+
+Keep the absolute size in view: this is worth having for battery and for
+long-uptime instances, but it was never a responsiveness problem.
 
 ## How to re-measure
 
@@ -103,10 +109,31 @@ correspond to real work. It logs a running count at debug level for exactly this
 reason: if that count climbs while nobody is using the machine, a poll has been
 reintroduced.
 
+## The second poll
+
+`event_loop` in handy-keys had the same shape for a different reason: it woke
+every 100 ms only to re-read a `running` flag, because shutdown was something it
+had to notice rather than something that reached it. It owned the listener, so
+nothing outside could drop it, and joining a thread parked in `recv` would have
+hung.
+
+Moving ownership fixes it. `HotkeyManager` keeps the listener and the loop gets
+only the receiver, so shutdown becomes a channel disconnect: `Drop` drops the
+listener, the backend thread stops, the sending half goes away, and the loop's
+`recv` ends. Shutdown also stopped being bounded below by the poll interval.
+
+The cost is that shutdown now depends on that teardown actually disconnecting
+the channel. The old flag-and-timeout would exit regardless; this will hang if a
+future backend change stops dropping the sender. A synthetic-input test guards
+it by asserting the drop returns.
+
 ## Still open
 
-`event_loop`'s 100 ms poll in handy-keys is unchanged. Making it block would
-deadlock the manager's `Drop`, which sets the `running` flag and then joins that
-thread — a blocked `recv()` would never return. Fixing it properly means letting
-the listener be dropped from outside the loop so the channel disconnects, which
-is a larger change to shutdown ordering than the win justifies on its own.
+The CGEventTap itself is created with `CGEventTapOptions::Default` rather than
+`ListenOnly`, at the head of the session tap chain, with mouse-button events in
+the mask. That makes every keystroke and click on the machine wait for Handy's
+callback before reaching the focused app. It is a small share of Handy's own CPU
+and so was not what this investigation was chasing, but it is the more
+interesting number: the cost lands on everything else running, not here.
+`TapDisabledByTimeout` is silently re-enabled with no logging, so overruns are
+currently invisible.
