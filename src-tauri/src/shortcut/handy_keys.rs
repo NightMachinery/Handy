@@ -21,13 +21,20 @@
 //! from a single thread. Commands (register/unregister) are sent via an mpsc
 //! channel and responses are synchronously awaited.
 //!
+//! Hotkey events arrive on a second channel owned by `HotkeyManager`, and
+//! `std::sync::mpsc` cannot select across two receivers. Rather than poll both
+//! on a timer, a forwarder thread takes the event receiver, blocks on it, and
+//! republishes each event onto the command channel as `ManagerCommand::Event`.
+//! The manager thread then blocks on that one channel and costs nothing while
+//! idle.
+//!
 //! ## Recording Mode
 //!
 //! For UI key capture, a separate `KeyboardListener` is created on-demand and
 //! polled from a dedicated recording thread. Events are emitted to the frontend
 //! via Tauri's event system.
 
-use handy_keys::{Hotkey, HotkeyId, HotkeyManager, HotkeyState, KeyboardListener};
+use handy_keys::{Hotkey, HotkeyEvent, HotkeyId, HotkeyManager, HotkeyState, KeyboardListener};
 use log::{debug, error, info};
 use serde::Serialize;
 use specta::Type;
@@ -53,6 +60,10 @@ enum ManagerCommand {
         binding_id: String,
         response: Sender<Result<(), String>>,
     },
+    /// A hotkey fired. Forwarded from the `HotkeyManager`'s own receiver by the
+    /// event-forwarder thread so the manager loop has a single channel to wait
+    /// on. See `manager_thread`.
+    Event(HotkeyEvent),
     Shutdown,
 }
 
@@ -90,10 +101,13 @@ impl HandyKeysState {
     pub fn new(app: AppHandle) -> Result<Self, String> {
         let (cmd_tx, cmd_rx) = mpsc::channel::<ManagerCommand>();
 
-        // Start the manager thread
+        // Start the manager thread. It gets a sender of its own so the
+        // forwarder it spawns can republish hotkey events onto this channel;
+        // `command_sender` below keeps the original alive for the app's use.
         let app_clone = app.clone();
+        let forward_tx = cmd_tx.clone();
         let thread_handle = thread::spawn(move || {
-            Self::manager_thread(cmd_rx, app_clone);
+            Self::manager_thread(cmd_rx, forward_tx, app_clone);
         });
 
         Ok(Self {
@@ -107,11 +121,15 @@ impl HandyKeysState {
     }
 
     /// The main manager thread - owns the HotkeyManager and processes commands
-    fn manager_thread(cmd_rx: Receiver<ManagerCommand>, app: AppHandle) {
+    fn manager_thread(
+        cmd_rx: Receiver<ManagerCommand>,
+        forward_tx: Sender<ManagerCommand>,
+        app: AppHandle,
+    ) {
         info!("handy-keys manager thread started");
 
         // Create the HotkeyManager in this thread
-        let manager = match HotkeyManager::new_with_blocking() {
+        let mut manager = match HotkeyManager::new_with_blocking() {
             Ok(m) => m,
             Err(e) => {
                 error!("Failed to create HotkeyManager: {}", e);
@@ -119,68 +137,104 @@ impl HandyKeysState {
             }
         };
 
+        // Hotkey events and commands arrive on two separate receivers, and
+        // `std::sync::mpsc` cannot wait on both. Move the event receiver onto a
+        // thread that blocks on it and republishes each event as a command, so
+        // the loop below has exactly one thing to wait for. Polling both
+        // instead cost a wakeup every 10ms for the life of the process, which
+        // measured as two thirds of Handy's total CPU on a long-lived instance.
+        match manager.take_event_receiver() {
+            Some(events) => {
+                thread::spawn(move || {
+                    // Ends on its own: when the manager thread drops the
+                    // `HotkeyManager`, the listener stops and the sending half
+                    // goes away, so `recv` reports a disconnect.
+                    while let Ok(event) = events.recv() {
+                        if forward_tx.send(ManagerCommand::Event(event)).is_err() {
+                            break;
+                        }
+                    }
+                    debug!("handy-keys event forwarder stopped");
+                });
+            }
+            // Cannot happen: the receiver is taken exactly once, here. Bail out
+            // rather than run a manager that can never deliver a hotkey.
+            None => {
+                error!("handy-keys event receiver was already taken; manager thread aborting");
+                return;
+            }
+        }
+
         // Maps binding IDs to HotkeyIds and hotkey strings
         let mut binding_to_hotkey: HashMap<String, HotkeyId> = HashMap::new();
         let mut hotkey_to_binding: HashMap<HotkeyId, (String, String)> = HashMap::new(); // (binding_id, hotkey_string)
 
+        // Every iteration corresponds to real work now that the loop blocks. A
+        // count that climbs while the machine is idle means someone has
+        // reintroduced a poll.
+        let mut iterations: u64 = 0;
+
         loop {
-            // Check for hotkey events (non-blocking)
-            while let Some(event) = manager.try_recv() {
-                if let Some((binding_id, hotkey_string)) = hotkey_to_binding.get(&event.id) {
-                    debug!(
-                        "handy-keys event: binding={}, hotkey={}, state={:?}",
-                        binding_id, hotkey_string, event.state
-                    );
-                    let is_pressed = event.state == HotkeyState::Pressed;
-                    handle_shortcut_event(&app, binding_id, hotkey_string, is_pressed);
+            // Blocks until there is something to do, and costs nothing until
+            // then. Do not reintroduce a timeout here.
+            let cmd = match cmd_rx.recv() {
+                Ok(cmd) => cmd,
+                Err(_) => {
+                    info!("Command channel disconnected, shutting down");
+                    break;
                 }
+            };
+
+            iterations += 1;
+            if iterations % 1000 == 0 {
+                debug!("handy-keys manager thread: {iterations} items processed");
             }
 
-            // Check for commands (non-blocking with timeout)
-            match cmd_rx.recv_timeout(std::time::Duration::from_millis(10)) {
-                Ok(cmd) => match cmd {
-                    ManagerCommand::Register {
-                        binding_id,
-                        hotkey_string,
-                        response,
-                    } => {
-                        let result = Self::do_register(
-                            &manager,
-                            &mut binding_to_hotkey,
-                            &mut hotkey_to_binding,
-                            &binding_id,
-                            &hotkey_string,
+            match cmd {
+                ManagerCommand::Event(event) => {
+                    if let Some((binding_id, hotkey_string)) = hotkey_to_binding.get(&event.id) {
+                        debug!(
+                            "handy-keys event: binding={}, hotkey={}, state={:?}",
+                            binding_id, hotkey_string, event.state
                         );
-                        let _ = response.send(result);
+                        let is_pressed = event.state == HotkeyState::Pressed;
+                        handle_shortcut_event(&app, binding_id, hotkey_string, is_pressed);
                     }
-                    ManagerCommand::Unregister {
-                        binding_id,
-                        response,
-                    } => {
-                        let result = Self::do_unregister(
-                            &manager,
-                            &mut binding_to_hotkey,
-                            &mut hotkey_to_binding,
-                            &binding_id,
-                        );
-                        let _ = response.send(result);
-                    }
-                    ManagerCommand::Shutdown => {
-                        info!("handy-keys manager thread shutting down");
-                        break;
-                    }
-                },
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    // No command, continue
                 }
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    info!("Command channel disconnected, shutting down");
+                ManagerCommand::Register {
+                    binding_id,
+                    hotkey_string,
+                    response,
+                } => {
+                    let result = Self::do_register(
+                        &manager,
+                        &mut binding_to_hotkey,
+                        &mut hotkey_to_binding,
+                        &binding_id,
+                        &hotkey_string,
+                    );
+                    let _ = response.send(result);
+                }
+                ManagerCommand::Unregister {
+                    binding_id,
+                    response,
+                } => {
+                    let result = Self::do_unregister(
+                        &manager,
+                        &mut binding_to_hotkey,
+                        &mut hotkey_to_binding,
+                        &binding_id,
+                    );
+                    let _ = response.send(result);
+                }
+                ManagerCommand::Shutdown => {
+                    info!("handy-keys manager thread shutting down");
                     break;
                 }
             }
         }
 
-        info!("handy-keys manager thread stopped");
+        info!("handy-keys manager thread stopped after {iterations} items");
     }
 
     /// Register a hotkey
