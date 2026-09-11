@@ -34,7 +34,9 @@
 //! polled from a dedicated recording thread. Events are emitted to the frontend
 //! via Tauri's event system.
 
-use handy_keys::{Hotkey, HotkeyEvent, HotkeyId, HotkeyManager, HotkeyState, KeyboardListener};
+use handy_keys::{
+    Hotkey, HotkeyEvent, HotkeyId, HotkeyManager, HotkeyState, KeyboardListener, ListenerOptions,
+};
 use log::{debug, error, info};
 use serde::Serialize;
 use specta::Type;
@@ -132,7 +134,15 @@ impl HandyKeysState {
         info!("handy-keys manager thread started");
 
         // Create the HotkeyManager in this thread
-        let mut manager = match HotkeyManager::new_with_blocking() {
+        // Mouse buttons stay out of the event tap. Handy binds keys only, and
+        // the tap is active — the window server waits for its callback before
+        // every masked event reaches the focused app — so observing clicks
+        // would put Handy in the synchronous path of input it never uses.
+        // Binding a mouse button is not supported while this is off.
+        let options = ListenerOptions {
+            mouse_buttons: false,
+        };
+        let mut manager = match HotkeyManager::new_with_blocking_and_options(options) {
             Ok(m) => m,
             Err(e) => {
                 error!("Failed to create HotkeyManager: {}", e);

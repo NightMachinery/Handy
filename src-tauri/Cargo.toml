@@ -190,8 +190,9 @@ tao-macros = { git = "https://github.com/cjpais/tao", rev = "c3bee28c1d446d95f08
 # shortcut/handy_keys.rs block on one channel instead of polling two every
 # 10ms; and a blocking event loop upstream, replacing a 100ms shutdown-flag
 # poll. The 10ms poll measured as ~2/3 of Handy's total CPU on a long-lived
-# instance. Upstream PR pending; drop this once it is released.
-handy-keys = { git = "https://github.com/NightMachinery/handy-keys", rev = "5b29a01faeae5c81afc321e4230d5856e0851b2b" }
+# instance. Also adds ListenerOptions, so mouse buttons can be kept out of the
+# event tap mask. Upstream PR pending; drop this once it is released.
+handy-keys = { git = "https://github.com/NightMachinery/handy-keys", rev = "8705811af90d977cff3e50cbdb56e1796d42bc61" }
 
 [dev-dependencies]
 tempfile = "3"

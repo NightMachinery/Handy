@@ -2552,7 +2552,7 @@ dependencies = [
 [[package]]
 name = "handy-keys"
 version = "0.3.4"
-source = "git+https://github.com/NightMachinery/handy-keys?rev=5b29a01faeae5c81afc321e4230d5856e0851b2b#5b29a01faeae5c81afc321e4230d5856e0851b2b"
+source = "git+https://github.com/NightMachinery/handy-keys?rev=8705811af90d977cff3e50cbdb56e1796d42bc61#8705811af90d977cff3e50cbdb56e1796d42bc61"
 dependencies = [
  "bitflags 2.11.0",
  "block2",
