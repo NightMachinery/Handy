@@ -177,6 +177,23 @@ Client work never enters the app process at all — that is the point of the sep
 
 Do not add a queue in front of the lease. The lease is the thing that serializes engine access; a second scheduler on top re-decides the same question and breaks fail-fast requests, which then wait behind a running job instead of being told the engine is busy.
 
+### Hotkey Bridge
+
+The handy-keys manager thread in `src-tauri/src/shortcut/handy_keys.rs` blocks
+on a single channel. Hotkey events and register/unregister commands arrive on
+two receivers that `std::sync::mpsc` cannot select across, so a forwarder thread
+takes the event receiver (via the `take_event_receiver` addition in the pinned
+handy-keys fork), blocks on it, and republishes each event onto the command
+channel as `ManagerCommand::Event`.
+
+Do not reintroduce a timeout on that loop. It previously polled both receivers
+every 10 ms, which cost 100 wakeups per second forever and measured as two
+thirds of the process's total CPU on a long-lived instance. Widening the timeout
+does not help either — it bounds hotkey latency rather than command latency, so
+it trades idle CPU for lag on every dictation keypress. The loop logs a running
+item count at debug level; if it climbs while the machine is idle, something has
+started polling again. See [docs/idle_cpu_hotkey_bridge.md](docs/idle_cpu_hotkey_bridge.md).
+
 ## Internationalization (i18n)
 
 All user-facing strings must use i18next translations. ESLint enforces this (no hardcoded strings in JSX).
