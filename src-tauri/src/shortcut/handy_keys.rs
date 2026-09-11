@@ -54,11 +54,14 @@ enum ManagerCommand {
     Register {
         binding_id: String,
         hotkey_string: String,
-        response: Sender<Result<(), String>>,
+        /// `None` for fire-and-forget callers, which cannot block on a reply.
+        /// The manager logs the failure instead of returning it.
+        response: Option<Sender<Result<(), String>>>,
     },
     Unregister {
         binding_id: String,
-        response: Sender<Result<(), String>>,
+        /// See `Register::response`.
+        response: Option<Sender<Result<(), String>>>,
     },
     /// A hotkey fired. Forwarded from the `HotkeyManager`'s own receiver by the
     /// event-forwarder thread so the manager loop has a single channel to wait
@@ -213,7 +216,16 @@ impl HandyKeysState {
                         &binding_id,
                         &hotkey_string,
                     );
-                    let _ = response.send(result);
+                    match response {
+                        Some(tx) => {
+                            let _ = tx.send(result);
+                        }
+                        None => {
+                            if let Err(e) = result {
+                                error!("Failed to register shortcut '{binding_id}': {e}");
+                            }
+                        }
+                    }
                 }
                 ManagerCommand::Unregister {
                     binding_id,
@@ -225,7 +237,16 @@ impl HandyKeysState {
                         &mut hotkey_to_binding,
                         &binding_id,
                     );
-                    let _ = response.send(result);
+                    match response {
+                        Some(tx) => {
+                            let _ = tx.send(result);
+                        }
+                        None => {
+                            if let Err(e) = result {
+                                error!("Failed to unregister shortcut '{binding_id}': {e}");
+                            }
+                        }
+                    }
                 }
                 ManagerCommand::Shutdown => {
                     info!("handy-keys manager thread shutting down");
@@ -270,13 +291,27 @@ impl HandyKeysState {
         hotkey_to_binding: &mut HashMap<HotkeyId, (String, String)>,
         binding_id: &str,
     ) -> Result<(), String> {
-        if let Some(id) = binding_to_hotkey.remove(binding_id) {
-            manager
-                .unregister(id)
-                .map_err(|e| format!("Failed to unregister hotkey: {}", e))?;
-            hotkey_to_binding.remove(&id);
-            debug!("Unregistered handy-keys shortcut: {}", binding_id);
+        let Some(&id) = binding_to_hotkey.get(binding_id) else {
+            // Not registered; nothing to undo.
+            return Ok(());
+        };
+
+        // Clear our own bookkeeping only once the hotkey is actually gone
+        // upstream. Removing first and then failing would leave us believing a
+        // still-live binding was free, so the next registration would collide
+        // with a hotkey we no longer think we own. `HotkeyNotFound` is the one
+        // failure that still means gone, so it clears too.
+        match manager.unregister(id) {
+            Ok(()) => {}
+            Err(handy_keys::Error::HotkeyNotFound(_)) => {
+                debug!("handy-keys had already dropped '{binding_id}'; clearing stale mapping");
+            }
+            Err(e) => return Err(format!("Failed to unregister hotkey: {}", e)),
         }
+
+        binding_to_hotkey.remove(binding_id);
+        hotkey_to_binding.remove(&id);
+        debug!("Unregistered handy-keys shortcut: {}", binding_id);
         Ok(())
     }
 
@@ -289,7 +324,7 @@ impl HandyKeysState {
             .send(ManagerCommand::Register {
                 binding_id: binding.id.clone(),
                 hotkey_string: binding.current_binding.clone(),
-                response: tx,
+                response: Some(tx),
             })
             .map_err(|_| "Failed to send register command")?;
 
@@ -305,12 +340,47 @@ impl HandyKeysState {
             .map_err(|_| "Failed to lock command_sender")?
             .send(ManagerCommand::Unregister {
                 binding_id: binding.id.clone(),
-                response: tx,
+                response: Some(tx),
             })
             .map_err(|_| "Failed to send unregister command")?;
 
         rx.recv()
             .map_err(|_| "Failed to receive unregister response")?
+    }
+
+    /// Queue a registration without waiting for the outcome.
+    ///
+    /// Ordering is the point. The blocking `register`/`unregister` above park on
+    /// a reply, so callers on a thread the manager might need used to hop onto
+    /// the async runtime first — and two such hops have no order relative to
+    /// each other, so an unregister could overtake the register it was meant to
+    /// undo. Sending on an unbounded channel never blocks, so these are safe to
+    /// call from anywhere and arrive in call order.
+    pub fn queue_register(&self, binding: &ShortcutBinding) {
+        let sent = self.command_sender.lock().map(|tx| {
+            tx.send(ManagerCommand::Register {
+                binding_id: binding.id.clone(),
+                hotkey_string: binding.current_binding.clone(),
+                response: None,
+            })
+        });
+        if sent.is_err() {
+            error!("Failed to queue registration for '{}'", binding.id);
+        }
+    }
+
+    /// Queue an unregistration without waiting for the outcome.
+    /// See [`queue_register`](Self::queue_register).
+    pub fn queue_unregister(&self, binding: &ShortcutBinding) {
+        let sent = self.command_sender.lock().map(|tx| {
+            tx.send(ManagerCommand::Unregister {
+                binding_id: binding.id.clone(),
+                response: None,
+            })
+        });
+        if sent.is_err() {
+            error!("Failed to queue unregistration for '{}'", binding.id);
+        }
     }
 
     /// Start recording mode for a specific binding
@@ -524,16 +594,11 @@ pub fn register_cancel_shortcut(app: &AppHandle) {
 
     #[cfg(not(target_os = "linux"))]
     {
-        let app_clone = app.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Some(cancel_binding) = get_settings(&app_clone).bindings.get("cancel").cloned() {
-                if let Some(state) = app_clone.try_state::<HandyKeysState>() {
-                    if let Err(e) = state.register(&cancel_binding) {
-                        error!("Failed to register cancel shortcut: {}", e);
-                    }
-                }
+        if let Some(cancel_binding) = get_settings(app).bindings.get("cancel").cloned() {
+            if let Some(state) = app.try_state::<HandyKeysState>() {
+                state.queue_register(&cancel_binding);
             }
-        });
+        }
     }
 }
 
@@ -547,14 +612,11 @@ pub fn unregister_cancel_shortcut(app: &AppHandle) {
 
     #[cfg(not(target_os = "linux"))]
     {
-        let app_clone = app.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Some(cancel_binding) = get_settings(&app_clone).bindings.get("cancel").cloned() {
-                if let Some(state) = app_clone.try_state::<HandyKeysState>() {
-                    let _ = state.unregister(&cancel_binding);
-                }
+        if let Some(cancel_binding) = get_settings(app).bindings.get("cancel").cloned() {
+            if let Some(state) = app.try_state::<HandyKeysState>() {
+                state.queue_unregister(&cancel_binding);
             }
-        });
+        }
     }
 }
 
