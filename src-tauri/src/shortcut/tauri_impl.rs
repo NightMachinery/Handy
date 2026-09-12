@@ -164,6 +164,58 @@ pub fn unregister_shortcut(app: &AppHandle, binding: ShortcutBinding) -> Result<
 }
 
 /// Register the cancel shortcut (called when recording starts)
+/// Whether the cancel binding *should* be registered right now.
+///
+/// Registration and unregistration are requested from different threads and
+/// serviced asynchronously, so the two requests have no order relative to each
+/// other. Rather than try to impose one, both sides record the intent here and
+/// ask for a reconcile; whichever reconcile runs last reads the latest intent
+/// and converges on it. Ordering then cannot matter.
+#[cfg(not(target_os = "linux"))]
+static CANCEL_WANTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Bring the cancel binding in line with `CANCEL_WANTED`. Idempotent: it checks
+/// what is actually registered first, so a duplicate reconcile is a no-op
+/// rather than an "already in use" error.
+///
+/// Called inline, deliberately. Dispatching this onto the async runtime was
+/// measured taking seven seconds to run under load, by which time the next
+/// recording had set the intent back and the reconcile became a no-op — so
+/// Escape stayed registered globally while Handy sat idle. The work here is a
+/// settings read, a parse and one plugin call, and registration is known to
+/// work off the main thread, so there is nothing to gain by deferring it.
+#[cfg(not(target_os = "linux"))]
+fn reconcile_cancel_shortcut(app: &AppHandle) {
+    use std::sync::atomic::Ordering;
+
+    let wanted = CANCEL_WANTED.load(Ordering::SeqCst);
+    let Some(binding) = get_settings(app).bindings.get("cancel").cloned() else {
+        return;
+    };
+    let Ok(shortcut) = binding.current_binding.parse::<Shortcut>() else {
+        // register_shortcut logs the parse failure in detail; nothing to do.
+        return;
+    };
+    let shortcut_str = binding.current_binding.clone();
+
+    let registered = app.global_shortcut().is_registered(shortcut);
+    // Logged because the Tauri path was previously silent on success, which is
+    // why a cancel binding that failed to register went unnoticed. Mirrors the
+    // handy-keys backend's registration lines.
+    if wanted && !registered {
+        match register_shortcut(app, binding) {
+            Ok(()) => debug!("Registered tauri cancel shortcut: {}", shortcut_str),
+            Err(e) => error!("Failed to register cancel shortcut: {}", e),
+        }
+    } else if !wanted && registered {
+        match unregister_shortcut(app, binding) {
+            Ok(()) => debug!("Unregistered tauri cancel shortcut: {}", shortcut_str),
+            Err(e) => error!("Failed to unregister cancel shortcut: {}", e),
+        }
+    }
+}
+
+/// Register the cancel shortcut (called when recording starts)
 pub fn register_cancel_shortcut(app: &AppHandle) {
     // Cancel shortcut is disabled on Linux due to instability with dynamic shortcut registration
     #[cfg(target_os = "linux")]
@@ -174,20 +226,13 @@ pub fn register_cancel_shortcut(app: &AppHandle) {
 
     #[cfg(not(target_os = "linux"))]
     {
-        let app_clone = app.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Some(cancel_binding) = get_settings(&app_clone).bindings.get("cancel").cloned() {
-                if let Err(e) = register_shortcut(&app_clone, cancel_binding) {
-                    error!("Failed to register cancel shortcut: {}", e);
-                }
-            }
-        });
+        CANCEL_WANTED.store(true, std::sync::atomic::Ordering::SeqCst);
+        reconcile_cancel_shortcut(app);
     }
 }
 
 /// Unregister the cancel shortcut (called when recording stops)
 pub fn unregister_cancel_shortcut(app: &AppHandle) {
-    // Cancel shortcut is disabled on Linux due to instability with dynamic shortcut registration
     #[cfg(target_os = "linux")]
     {
         let _ = app;
@@ -196,12 +241,7 @@ pub fn unregister_cancel_shortcut(app: &AppHandle) {
 
     #[cfg(not(target_os = "linux"))]
     {
-        let app_clone = app.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Some(cancel_binding) = get_settings(&app_clone).bindings.get("cancel").cloned() {
-                // We ignore errors here as it might already be unregistered
-                let _ = unregister_shortcut(&app_clone, cancel_binding);
-            }
-        });
+        CANCEL_WANTED.store(false, std::sync::atomic::Ordering::SeqCst);
+        reconcile_cancel_shortcut(app);
     }
 }
