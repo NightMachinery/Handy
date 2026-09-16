@@ -194,6 +194,16 @@ it trades idle CPU for lag on every dictation keypress. The loop logs a running
 item count at debug level; if it climbs while the machine is idle, something has
 started polling again. See [docs/idle_cpu_hotkey_bridge.md](docs/idle_cpu_hotkey_bridge.md).
 
+Nothing dispatched from a global-shortcut callback may call back into the
+shortcut system. `tauri-plugin-global-shortcut` invokes the handler while still
+holding the `MutexGuard` over its own shortcut map, and on macOS that callback
+runs on the main thread, so even a read-only `is_registered` there deadlocks the
+whole app. Cancel is the one binding executed inline in the callback — every
+transcribe binding goes through the coordinator's channel first — so it is the
+one that hits this. `request_cancel_reconcile` keeps the work on a dedicated
+thread for that reason; do not inline it. See
+[docs/cancel_shortcut_deadlock.md](docs/cancel_shortcut_deadlock.md).
+
 Registration order is also load-bearing. The cancel binding is registered when
 recording starts and unregistered when it stops, and those two calls must arrive
 in that order. They reach the manager through `queue_register`/`queue_unregister`,

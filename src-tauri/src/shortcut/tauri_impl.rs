@@ -178,12 +178,8 @@ static CANCEL_WANTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicB
 /// what is actually registered first, so a duplicate reconcile is a no-op
 /// rather than an "already in use" error.
 ///
-/// Called inline, deliberately. Dispatching this onto the async runtime was
-/// measured taking seven seconds to run under load, by which time the next
-/// recording had set the intent back and the reconcile became a no-op — so
-/// Escape stayed registered globally while Handy sat idle. The work here is a
-/// settings read, a parse and one plugin call, and registration is known to
-/// work off the main thread, so there is nothing to gain by deferring it.
+/// Never call this from a global-shortcut handler; go through
+/// [`request_cancel_reconcile`], which is why that function exists.
 #[cfg(not(target_os = "linux"))]
 fn reconcile_cancel_shortcut(app: &AppHandle) {
     use std::sync::atomic::Ordering;
@@ -215,6 +211,54 @@ fn reconcile_cancel_shortcut(app: &AppHandle) {
     }
 }
 
+/// Hand a reconcile to the dedicated reconciler thread.
+///
+/// The reconcile must not run on the calling thread, because one of its callers
+/// is a global-shortcut handler. The plugin looks the handler up inside an
+/// `if let Some(shortcut) = shortcuts_.lock().unwrap().get(&e.id)`, so the
+/// `MutexGuard` over its shortcut map is still alive while our handler runs —
+/// and `reconcile_cancel_shortcut` starts by calling `is_registered`, which
+/// locks that same non-reentrant `std::sync::Mutex`. Running it inline
+/// therefore deadlocked the handler against itself, permanently.
+///
+/// On macOS that handler is a Carbon callback on the *main* thread, so the
+/// whole app froze and had to be killed. Cancel was the only binding that could
+/// hit it: every other binding is dispatched through the transcription
+/// coordinator's channel and so runs off the callback thread already. Pressing
+/// Escape while recording reproduced it every time.
+///
+/// One dedicated thread rather than `tauri::async_runtime::spawn`: reconciles
+/// have to stay ordered relative to each other, and a spawned task was measured
+/// taking seven seconds to run under load, by which time the next recording had
+/// set the intent back and the reconcile became a no-op — so Escape stayed
+/// registered globally while Handy sat idle. This thread does nothing else, so
+/// nothing can queue ahead of it.
+#[cfg(not(target_os = "linux"))]
+fn request_cancel_reconcile(app: &AppHandle) {
+    use std::sync::mpsc::{channel, Sender};
+    use std::sync::OnceLock;
+
+    static RECONCILER: OnceLock<Sender<AppHandle>> = OnceLock::new();
+
+    let tx = RECONCILER.get_or_init(|| {
+        let (tx, rx) = channel::<AppHandle>();
+        std::thread::spawn(move || {
+            // Each request reads `CANCEL_WANTED` when it runs rather than when
+            // it was queued, so a request that waited behind a newer one
+            // converges on the newer intent instead of undoing it.
+            while let Ok(app) = rx.recv() {
+                reconcile_cancel_shortcut(&app);
+            }
+            debug!("cancel-shortcut reconciler thread stopped");
+        });
+        tx
+    });
+
+    if tx.send(app.clone()).is_err() {
+        error!("cancel-shortcut reconciler is gone; cancel binding left as-is");
+    }
+}
+
 /// Register the cancel shortcut (called when recording starts)
 pub fn register_cancel_shortcut(app: &AppHandle) {
     // Cancel shortcut is disabled on Linux due to instability with dynamic shortcut registration
@@ -227,7 +271,7 @@ pub fn register_cancel_shortcut(app: &AppHandle) {
     #[cfg(not(target_os = "linux"))]
     {
         CANCEL_WANTED.store(true, std::sync::atomic::Ordering::SeqCst);
-        reconcile_cancel_shortcut(app);
+        request_cancel_reconcile(app);
     }
 }
 
@@ -242,6 +286,6 @@ pub fn unregister_cancel_shortcut(app: &AppHandle) {
     #[cfg(not(target_os = "linux"))]
     {
         CANCEL_WANTED.store(false, std::sync::atomic::Ordering::SeqCst);
-        reconcile_cancel_shortcut(app);
+        request_cancel_reconcile(app);
     }
 }
