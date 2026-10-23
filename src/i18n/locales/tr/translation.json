@@ -691,6 +691,8 @@
     },
     "noInputDeviceTitle": "Mikrofon bulunamadı",
     "noInputDevice": "Ses giriş aygıtı algılanamadı. Lütfen bir mikrofon veya kulaklık bağlayın ve tekrar deneyin.",
+    "builtinMicLidClosedTitle": "Dahili mikrofon kullanılamıyor",
+    "builtinMicLidClosed": "Mac'iniz kapak kapalıyken dahili mikrofonu kapatır. Lütfen bir mikrofon veya kulaklık bağlayın ve tekrar deneyin.",
     "recordingFailed": "Kayıt başlatılamadı: {{error}}",
     "modelLoadFailed": "Model yüklenemedi: {{model}}",
     "modelLoadFailedUnknown": "bilinmeyen model",

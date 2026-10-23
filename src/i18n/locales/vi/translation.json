@@ -691,6 +691,8 @@
     },
     "noInputDeviceTitle": "Không tìm thấy micrô",
     "noInputDevice": "Không phát hiện thiết bị đầu vào âm thanh nào. Vui lòng kết nối micrô hoặc tai nghe và thử lại.",
+    "builtinMicLidClosedTitle": "Micrô tích hợp không khả dụng",
+    "builtinMicLidClosed": "Máy Mac tắt micrô tích hợp khi nắp đang đóng. Vui lòng kết nối micrô hoặc tai nghe và thử lại.",
     "recordingFailed": "Không thể bắt đầu ghi âm: {{error}}",
     "modelLoadFailed": "Không thể tải mô hình: {{model}}",
     "modelLoadFailedUnknown": "mô hình không xác định",

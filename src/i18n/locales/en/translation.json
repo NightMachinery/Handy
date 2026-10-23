@@ -694,6 +694,8 @@
     },
     "noInputDeviceTitle": "No Microphone Found",
     "noInputDevice": "No audio input device was detected. Please connect a microphone or headset and try again.",
+    "builtinMicLidClosedTitle": "Built-in Microphone Unavailable",
+    "builtinMicLidClosed": "Your Mac turns off its built-in microphone while the lid is closed. Connect a microphone or headset, then try again.",
     "recordingFailed": "Failed to start recording: {{error}}",
     "modelLoadFailed": "Failed to load model: {{model}}",
     "modelLoadFailedUnknown": "unknown model",

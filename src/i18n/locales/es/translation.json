@@ -691,6 +691,8 @@
     },
     "noInputDeviceTitle": "No se encontró micrófono",
     "noInputDevice": "No se detectó ningún dispositivo de entrada de audio. Conecta un micrófono o auriculares e inténtalo de nuevo.",
+    "builtinMicLidClosedTitle": "Micrófono integrado no disponible",
+    "builtinMicLidClosed": "Tu Mac desactiva el micrófono integrado mientras la tapa está cerrada. Conecta un micrófono o auriculares e inténtalo de nuevo.",
     "recordingFailed": "Error al iniciar la grabación: {{error}}",
     "modelLoadFailed": "Error al cargar el modelo: {{model}}",
     "modelLoadFailedUnknown": "modelo desconocido",

@@ -691,6 +691,8 @@
     },
     "noInputDeviceTitle": "Kein Mikrofon gefunden",
     "noInputDevice": "Es wurde kein Audio-Eingabegerät erkannt. Bitte schließe ein Mikrofon oder Headset an und versuche es erneut.",
+    "builtinMicLidClosedTitle": "Eingebautes Mikrofon nicht verfügbar",
+    "builtinMicLidClosed": "Dein Mac schaltet das eingebaute Mikrofon bei geschlossenem Deckel ab. Bitte schließe ein Mikrofon oder Headset an und versuche es erneut.",
     "recordingFailed": "Aufnahme konnte nicht gestartet werden: {{error}}",
     "modelLoadFailed": "Modell konnte nicht geladen werden: {{model}}",
     "modelLoadFailedUnknown": "unbekanntes Modell",

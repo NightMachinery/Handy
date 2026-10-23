@@ -691,6 +691,8 @@
     },
     "noInputDeviceTitle": "Mikrofon nebyl nalezen",
     "noInputDevice": "Nebylo detekováno žádné zvukové vstupní zařízení. Připojte mikrofon nebo sluchátka a zkuste to znovu.",
+    "builtinMicLidClosedTitle": "Vestavěný mikrofon není dostupný",
+    "builtinMicLidClosed": "Váš Mac při zavřeném víku vypíná vestavěný mikrofon. Připojte mikrofon nebo sluchátka a zkuste to znovu.",
     "recordingFailed": "Nepodařilo se spustit nahrávání: {{error}}",
     "modelLoadFailed": "Nepodařilo se načíst model: {{model}}",
     "modelLoadFailedUnknown": "neznámý model",

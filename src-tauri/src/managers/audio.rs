@@ -1,5 +1,5 @@
 use crate::audio_toolkit::{
-    list_input_devices,
+    is_builtin_input_device, list_input_devices,
     vad::{
         SmoothedVad, VAD_OFFLINE_HANGOVER_FRAMES, VAD_ONSET_FRAMES, VAD_PREFILL_FRAMES,
         VAD_STREAMING_HANGOVER_FRAMES,
@@ -19,6 +19,13 @@ use tauri::Manager;
 
 const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const VAD_THRESHOLD: f32 = 0.3;
+
+/// Returned by `try_start_recording` when the lid is closed and the stream
+/// would capture from the built-in microphone. Apple laptops cut that
+/// microphone off in hardware while the lid is closed, so the recording would
+/// be pure silence and transcribe to nothing.
+pub const BUILTIN_MIC_LID_CLOSED_ERROR: &str =
+    "The built-in microphone does not work while the lid is closed";
 
 fn set_mute(mute: bool) {
     // Expected behavior:
@@ -714,6 +721,7 @@ impl AudioRecordingManager {
             // Cancel any pending lazy close (no-op in always-on mode, where
             // closes are never scheduled).
             self.close_generation.fetch_add(1, Ordering::SeqCst);
+            let stream_was_open = *self.is_open.lock().unwrap();
             // Opens the stream in on-demand mode. In always-on mode the stream
             // is normally already open and this is a cheap aliveness check —
             // but if the capture worker died (device disconnect), it rebuilds
@@ -722,6 +730,10 @@ impl AudioRecordingManager {
             if let Err(e) = self.start_microphone_stream() {
                 let msg = format!("{e}");
                 error!("Failed to open microphone stream: {msg}");
+                return Err(msg);
+            }
+            if let Err(msg) = self.refuse_builtin_mic_with_lid_closed(stream_was_open) {
+                error!("Refusing to record: {msg}");
                 return Err(msg);
             }
 
@@ -742,6 +754,62 @@ impl AudioRecordingManager {
         } else {
             Err("Already recording".to_string())
         }
+    }
+
+    /// True when the lid is closed and the open stream captures from the
+    /// built-in microphone, which the hardware has cut off.
+    fn capturing_from_lid_closed_builtin_mic(&self) -> bool {
+        // Lid first: the IOKit read costs microseconds, while the device
+        // lookup enumerates every CoreAudio device.
+        if !clamshell::is_clamshell().unwrap_or(false) {
+            return false;
+        }
+        let device_name = self
+            .recorder
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|rec| rec.device_name());
+        let builtin = device_name
+            .as_deref()
+            .and_then(is_builtin_input_device)
+            .unwrap_or(false);
+        debug!("lid closed; input device {device_name:?} built-in={builtin}");
+        builtin
+    }
+
+    /// Refuses a recording that would capture from the built-in microphone
+    /// with the lid closed, closing the stream on the way out.
+    ///
+    /// Must be called right after `start_microphone_stream()` succeeds, with
+    /// whether a stream was already open before that call.
+    fn refuse_builtin_mic_with_lid_closed(&self, stream_was_open: bool) -> Result<(), String> {
+        if !self.capturing_from_lid_closed_builtin_mic() {
+            return Ok(());
+        }
+
+        if stream_was_open {
+            // A stream that was already open (always-on mode, or the lazy
+            // close window) can predate the lid closing or the user plugging
+            // in a microphone. Reopen it on whatever the settings resolve to
+            // now before blaming the user.
+            info!("Open stream is on the built-in microphone with the lid closed; reopening");
+            self.close_generation.fetch_add(1, Ordering::SeqCst);
+            self.stop_microphone_stream();
+            self.invalidate_device_cache();
+            self.start_microphone_stream()
+                .map_err(|e| format!("Failed to reopen microphone stream: {e}"))?;
+            if !self.capturing_from_lid_closed_builtin_mic() {
+                return Ok(());
+            }
+        }
+
+        // Closed in always-on mode too: keeping a dead microphone open lights
+        // the privacy indicator for nothing, and the next start reopens it.
+        // Closing also restores the system mute if the always-on start sound
+        // already applied it.
+        self.stop_microphone_stream();
+        Err(BUILTIN_MIC_LID_CLOSED_ERROR.to_string())
     }
 
     pub fn update_selected_device(&self) -> Result<(), anyhow::Error> {

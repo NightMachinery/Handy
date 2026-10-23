@@ -355,6 +355,12 @@ impl AudioRecorder {
         }
     }
 
+    /// Name of the device the open stream captures from: the one it was opened
+    /// on, even if the system default has moved since. `None` while closed.
+    pub fn device_name(&self) -> Option<String> {
+        self.device.as_ref().and_then(|device| device.name().ok())
+    }
+
     pub fn start(&self, vad_policy: VadPolicy) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(tx) = &self.cmd_tx {
             tx.send(Cmd::Start(vad_policy, Instant::now()))?;

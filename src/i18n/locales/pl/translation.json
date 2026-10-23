@@ -691,6 +691,8 @@
     },
     "noInputDeviceTitle": "Nie znaleziono mikrofonu",
     "noInputDevice": "Nie wykryto żadnego urządzenia wejściowego audio. Podłącz mikrofon lub słuchawki i spróbuj ponownie.",
+    "builtinMicLidClosedTitle": "Wbudowany mikrofon jest niedostępny",
+    "builtinMicLidClosed": "Mac wyłącza wbudowany mikrofon, gdy pokrywa jest zamknięta. Podłącz mikrofon lub słuchawki i spróbuj ponownie.",
     "recordingFailed": "Nie udało się rozpocząć nagrywania: {{error}}",
     "modelLoadFailed": "Nie udało się załadować modelu: {{model}}",
     "modelLoadFailedUnknown": "nieznany model",

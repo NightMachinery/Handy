@@ -691,6 +691,8 @@
     },
     "noInputDeviceTitle": "マイクが見つかりません",
     "noInputDevice": "オーディオ入力デバイスが検出されませんでした。マイクまたはヘッドセットを接続してから再試行してください。",
+    "builtinMicLidClosedTitle": "内蔵マイクを使用できません",
+    "builtinMicLidClosed": "Mac は蓋を閉じている間、内蔵マイクをオフにします。マイクまたはヘッドセットを接続してから再試行してください。",
     "recordingFailed": "録音の開始に失敗しました: {{error}}",
     "modelLoadFailed": "モデルの読み込みに失敗しました: {{model}}",
     "modelLoadFailedUnknown": "不明なモデル",

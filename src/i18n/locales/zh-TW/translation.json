@@ -691,6 +691,8 @@
     },
     "noInputDeviceTitle": "找不到麥克風",
     "noInputDevice": "未偵測到音訊輸入裝置。請連接麥克風或耳機後重試。",
+    "builtinMicLidClosedTitle": "內建麥克風無法使用",
+    "builtinMicLidClosed": "闔上螢幕時，Mac 會關閉內建麥克風。請連接麥克風或耳機後重試。",
     "recordingFailed": "錄音啟動失敗: {{error}}",
     "modelLoadFailed": "載入模型失敗: {{model}}",
     "modelLoadFailedUnknown": "未知模型",

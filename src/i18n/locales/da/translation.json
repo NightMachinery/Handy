@@ -694,6 +694,8 @@
     },
     "noInputDeviceTitle": "Ingen mikrofon fundet",
     "noInputDevice": "Ingen lydinputenhed blev registreret. Tilslut en mikrofon eller et headset, og prøv igen.",
+    "builtinMicLidClosedTitle": "Indbygget mikrofon utilgængelig",
+    "builtinMicLidClosed": "Din Mac slår den indbyggede mikrofon fra, når låget er lukket. Tilslut en mikrofon eller et headset, og prøv igen.",
     "recordingFailed": "Kunne ikke starte optagelse: {{error}}",
     "modelLoadFailed": "Kunne ikke indlæse model: {{model}}",
     "modelLoadFailedUnknown": "ukendt model",

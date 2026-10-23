@@ -694,6 +694,8 @@
     },
     "noInputDeviceTitle": "Geen microfoon gevonden",
     "noInputDevice": "Er is geen audio-invoerapparaat gedetecteerd. Sluit een microfoon of headset aan en probeer het opnieuw.",
+    "builtinMicLidClosedTitle": "Ingebouwde microfoon niet beschikbaar",
+    "builtinMicLidClosed": "Je Mac schakelt de ingebouwde microfoon uit zolang het deksel dicht is. Sluit een microfoon of headset aan en probeer het opnieuw.",
     "recordingFailed": "Opname starten mislukt: {{error}}",
     "modelLoadFailed": "Model laden mislukt: {{model}}",
     "modelLoadFailedUnknown": "onbekend model",

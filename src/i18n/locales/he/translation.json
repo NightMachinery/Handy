@@ -691,6 +691,8 @@
     },
     "noInputDeviceTitle": "לא נמצא מיקרופון",
     "noInputDevice": "לא זוהה התקן קלט שמע. חבר מיקרופון או אוזנייה ונסה שוב.",
+    "builtinMicLidClosedTitle": "המיקרופון המובנה אינו זמין",
+    "builtinMicLidClosed": "ה-Mac מכבה את המיקרופון המובנה כשהמכסה סגור. חבר מיקרופון או אוזנייה ונסה שוב.",
     "recordingFailed": "הפעלת ההקלטה נכשלה: {{error}}",
     "modelLoadFailed": "טעינת המודל נכשלה: {{model}}",
     "modelLoadFailedUnknown": "מודל לא ידוע",

@@ -109,6 +109,10 @@ function App() {
           defaultValue: t("errors.micPermissionDenied.generic"),
         });
         toast.error(t("errors.micPermissionDeniedTitle"), { description });
+      } else if (error_type === "builtin_mic_lid_closed") {
+        toast.error(t("errors.builtinMicLidClosedTitle"), {
+          description: t("errors.builtinMicLidClosed"),
+        });
       } else if (error_type === "no_input_device") {
         toast.error(t("errors.noInputDeviceTitle"), {
           description: t("errors.noInputDevice"),

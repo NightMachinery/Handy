@@ -157,9 +157,17 @@ objc2 = "0.6"
 objc2-foundation = "0.3"
 objc2-app-kit = "0.3"
 objc2-service-management = "0.3.2"
-# Lid (clamshell) state via IOKit. Already in the tree through cpal; this
-# entry only makes it nameable.
+# Lid (clamshell) state via IOKit, and the CoreAudio transport type that
+# tells the built-in microphone apart. All three are already in the tree
+# through cpal (same features); these entries only make them nameable.
 core-foundation-sys = "0.8"
+coreaudio-rs = { version = "0.13", default-features = false, features = [
+  "audio_toolbox",
+] }
+objc2-core-audio = { version = "0.3", default-features = false, features = [
+  "std",
+  "AudioHardware",
+] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk-layer-shell = { version = "0.8", features = ["v0_6"] }

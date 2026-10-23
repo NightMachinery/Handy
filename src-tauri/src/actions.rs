@@ -3,7 +3,7 @@ use crate::apple_intelligence;
 use crate::audio_feedback::{play_feedback_sound, play_feedback_sound_blocking, SoundType};
 use crate::audio_toolkit::{is_microphone_access_denied, is_no_input_device_error, VadPolicy};
 use crate::command_filter::{run_command_filter, CommandFilterResult};
-use crate::managers::audio::AudioRecordingManager;
+use crate::managers::audio::{AudioRecordingManager, BUILTIN_MIC_LID_CLOSED_ERROR};
 use crate::managers::history::HistoryManager;
 use crate::managers::model::ModelManager;
 use crate::managers::transcription::StreamWorkKind;
@@ -686,7 +686,9 @@ impl ShortcutAction for TranscribeAction {
             utils::hide_recording_overlay(app);
             change_tray_icon(app, TrayIconState::Idle);
             if let Some(err) = recording_error {
-                let error_type = if is_microphone_access_denied(&err) {
+                let error_type = if err == BUILTIN_MIC_LID_CLOSED_ERROR {
+                    "builtin_mic_lid_closed"
+                } else if is_microphone_access_denied(&err) {
                     "microphone_permission_denied"
                 } else if is_no_input_device_error(&err) {
                     "no_input_device"
