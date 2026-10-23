@@ -2458,6 +2458,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "core-foundation-sys",
  "cpal",
  "enigo",
  "env_filter",

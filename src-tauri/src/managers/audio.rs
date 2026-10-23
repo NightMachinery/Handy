@@ -377,8 +377,8 @@ impl AudioRecordingManager {
     /* ---------- helper methods --------------------------------------------- */
 
     /// The microphone name the settings ask for, or `None` for the system
-    /// default. Only runs the clamshell probe (an `ioreg` subprocess, ~10-20ms)
-    /// when a clamshell microphone is actually configured.
+    /// default. Only runs the clamshell probe when a clamshell microphone is
+    /// actually configured.
     fn desired_device_name(&self, settings: &AppSettings) -> Option<String> {
         if settings.clamshell_microphone.is_some() {
             let clamshell_started = Instant::now();
