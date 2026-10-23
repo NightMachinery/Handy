@@ -1,4 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
+import { MicOff } from "lucide-react";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import "./RecordingOverlay.css";
@@ -12,11 +13,25 @@ import type {
 import i18n, { syncLanguageFromSettings } from "@/i18n";
 import { getLanguageDirection } from "@/lib/utils/rtl";
 
-type OverlayState = "recording" | "streaming" | "transcribing" | "processing";
+type OverlayState =
+  | "recording"
+  | "streaming"
+  | "transcribing"
+  | "processing"
+  | "error";
 
 // Number of reactive bars in the waveform (the simple, smoothed style shared by
 // every overlay form). Mic levels arrive as 16 FFT buckets; we take the first N.
 const WAVE_BARS = 9;
+
+// Error card text per `overlay-error` payload (the backend's recording
+// error_type). Only errors the user would otherwise never see are routed here.
+const ERROR_TEXT: Record<string, { title: string; body: string }> = {
+  builtin_mic_lid_closed: {
+    title: "errors.builtinMicLidClosedTitle",
+    body: "errors.builtinMicLidClosed",
+  },
+};
 
 const RecordingOverlay: React.FC = () => {
   const { t } = useTranslation();
@@ -27,6 +42,7 @@ const RecordingOverlay: React.FC = () => {
     committed: "",
     tentative: "",
   });
+  const [errorType, setErrorType] = useState("");
   const [phase, setPhase] = useState<StreamPhase>("listening");
   const [workKind, setWorkKind] = useState<StreamWorkKind>("transcribing");
   const [elapsed, setElapsed] = useState(0);
@@ -82,6 +98,10 @@ const RecordingOverlay: React.FC = () => {
         setIsVisible(false);
       });
 
+      const unlistenError = await listen<string>("overlay-error", (event) => {
+        setErrorType(event.payload);
+      });
+
       const unlistenLevel = await listen<number[]>("mic-level", (event) => {
         const newLevels = event.payload as number[];
         // Exponential smoothing across the 16 buckets, then take the first N
@@ -107,6 +127,7 @@ const RecordingOverlay: React.FC = () => {
       return () => {
         unlistenShow();
         unlistenHide();
+        unlistenError();
         unlistenLevel();
         unlistenStream();
         unlistenPhase();
@@ -208,6 +229,26 @@ const RecordingOverlay: React.FC = () => {
       <div className="sbase-r">{showCancel && cancelBtn}</div>
     </div>
   );
+
+  // ---- Error card: wider and taller than the pill, so a title and a short
+  // instruction fit. The backend hides it after a few seconds. ----
+  if (state === "error") {
+    const text = ERROR_TEXT[errorType];
+    if (!text) return null;
+    return (
+      <div dir={direction} className={`ov-stage ${position}`}>
+        <div className="scard serror" role="alert">
+          <span className="serror-icon">
+            <MicOff aria-hidden="true" />
+          </span>
+          <div className="serror-text">
+            <div className="serror-title">{t(text.title)}</div>
+            <div className="serror-body">{t(text.body)}</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // ---- Live overlay: a pill that sculpts open into a panel ----
   if (state === "streaming") {

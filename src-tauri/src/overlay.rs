@@ -50,14 +50,29 @@ const OVERLAY_HEIGHT: f64 = 46.0;
 const OVERLAY_STREAM_WIDTH: f64 = 400.0;
 const OVERLAY_STREAM_HEIGHT: f64 = 120.0;
 
+// Error card: 382 wide (--ov-error-w); its height follows the message. Every
+// current translation measures 80-97 (one-line title, two- or three-line body),
+// so the extra height leaves room for one more wrapped line.
+const OVERLAY_ERROR_WIDTH: f64 = 400.0;
+const OVERLAY_ERROR_HEIGHT: f64 = 128.0;
+
+/// How long a recording error stays up before the overlay hides itself.
+const ERROR_OVERLAY_DURATION: std::time::Duration = std::time::Duration::from_secs(6);
+
 /// Overlay window size (logical) for a given UI state.
 fn overlay_dimensions(state: &str) -> (f64, f64) {
-    if state == "streaming" {
-        (OVERLAY_STREAM_WIDTH, OVERLAY_STREAM_HEIGHT)
-    } else {
-        (OVERLAY_WIDTH, OVERLAY_HEIGHT)
+    match state {
+        "streaming" => (OVERLAY_STREAM_WIDTH, OVERLAY_STREAM_HEIGHT),
+        "error" => (OVERLAY_ERROR_WIDTH, OVERLAY_ERROR_HEIGHT),
+        _ => (OVERLAY_WIDTH, OVERLAY_HEIGHT),
     }
 }
+
+/// Bumped by every overlay show. A delayed hide only acts if no show has
+/// happened since it was requested, so it cannot hide the overlay out from
+/// under the next recording. Written and compared on the main thread only,
+/// which serializes it against the shows themselves.
+static OVERLAY_SHOW_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 static LAST_MIC_LEVEL_EMIT: AtomicU64 = AtomicU64::new(0);
 const EMIT_THROTTLE_MS: u64 = 33; // ~30 FPS
@@ -481,6 +496,7 @@ fn show_overlay_state(app_handle: &AppHandle, state: &str) {
 }
 
 fn show_overlay_state_on_main(app_handle: &AppHandle, state: &str) {
+    OVERLAY_SHOW_GENERATION.fetch_add(1, Ordering::SeqCst);
     // Size the overlay for this state (compact vs. streaming), then position it.
     let (width, height) = overlay_dimensions(state);
     if let Some(overlay_window) = app_handle.get_webview_window("recording_overlay") {
@@ -562,6 +578,34 @@ pub fn show_processing_overlay(app_handle: &AppHandle) {
     show_overlay_state(app_handle, "processing");
 }
 
+/// Shows a recording error in the enlarged error card, then hides it after
+/// `ERROR_OVERLAY_DURATION` unless another state has replaced it by then.
+///
+/// Shown even when overlay_style is None: otherwise the hotkey just appears to
+/// do nothing, and the main window that would toast the error is usually
+/// hidden in the tray.
+pub fn show_error_overlay(app_handle: &AppHandle, error_type: &str) {
+    let handle = app_handle.clone();
+    let error_type = error_type.to_string();
+    let _ = app_handle.run_on_main_thread(move || {
+        if let Some(overlay_window) = handle.get_webview_window("recording_overlay") {
+            // Before "show-overlay", so the card has its text when it mounts.
+            let _ = overlay_window.emit("overlay-error", &error_type);
+        }
+        show_overlay_state_on_main(&handle, "error");
+        let generation = OVERLAY_SHOW_GENERATION.load(Ordering::SeqCst);
+        std::thread::spawn(move || {
+            std::thread::sleep(ERROR_OVERLAY_DURATION);
+            let main_handle = handle.clone();
+            let _ = handle.run_on_main_thread(move || {
+                if OVERLAY_SHOW_GENERATION.load(Ordering::SeqCst) == generation {
+                    hide_recording_overlay_on_main(&main_handle);
+                }
+            });
+        });
+    });
+}
+
 /// Updates the overlay window position based on current settings
 pub fn update_overlay_position(app_handle: &AppHandle) {
     // Positioning queries monitors/cursor (GDK/Xlib on Linux) and moves the
@@ -606,16 +650,30 @@ fn update_overlay_position_on_main(app_handle: &AppHandle) {
 
 /// Hides the recording overlay window with fade-out animation
 pub fn hide_recording_overlay(app_handle: &AppHandle) {
+    // On the main thread, like every show, so a hide and a show requested in
+    // that order also land in that order.
+    let handle = app_handle.clone();
+    let _ = app_handle.run_on_main_thread(move || hide_recording_overlay_on_main(&handle));
+}
+
+fn hide_recording_overlay_on_main(app_handle: &AppHandle) {
     // Always hide the overlay regardless of settings - if setting was changed while recording,
     // we still want to hide it properly
     if let Some(overlay_window) = app_handle.get_webview_window("recording_overlay") {
         // Emit event to trigger fade-out animation
         let _ = overlay_window.emit("hide-overlay", ());
-        // Hide the window after a short delay to allow animation to complete
-        let window_clone = overlay_window.clone();
+        // Hide the window after a short delay to allow animation to complete,
+        // unless something was shown in the meantime (the next recording, or
+        // an error card replacing this one).
+        let generation = OVERLAY_SHOW_GENERATION.load(Ordering::SeqCst);
+        let handle = app_handle.clone();
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(300));
-            let _ = window_clone.hide();
+            let _ = handle.run_on_main_thread(move || {
+                if OVERLAY_SHOW_GENERATION.load(Ordering::SeqCst) == generation {
+                    let _ = overlay_window.hide();
+                }
+            });
         });
     }
 }

@@ -683,7 +683,6 @@ impl ShortcutAction for TranscribeAction {
             // Starting failed (for example due to blocked microphone permissions).
             // Revert UI state so we don't stay stuck in the recording overlay.
             tm.cancel_stream();
-            utils::hide_recording_overlay(app);
             change_tray_icon(app, TrayIconState::Idle);
             if let Some(err) = recording_error {
                 let error_type = if err == BUILTIN_MIC_LID_CLOSED_ERROR {
@@ -695,6 +694,14 @@ impl ShortcutAction for TranscribeAction {
                 } else {
                     "unknown"
                 };
+                // The overlay swaps the recording pill for an error card. With
+                // the lid closed the main window is rarely on screen, so its
+                // toast alone would go unseen.
+                if error_type == "builtin_mic_lid_closed" {
+                    utils::show_error_overlay(app, error_type);
+                } else {
+                    utils::hide_recording_overlay(app);
+                }
                 let _ = app.emit(
                     "recording-error",
                     RecordingErrorEvent {

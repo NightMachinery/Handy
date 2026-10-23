@@ -31,6 +31,7 @@
   --ov-work-w: 216px; /* working pill (transcribing / polishing) -- wide enough to
                          center longer labels; shared by Live (collapsed) + minimal */
   --ov-open-w: 392px; /* Live panel, expanded */
+  --ov-error-w: 382px; /* error card; its height follows the message */
   --ov-base-h: 40px; /* control-row height (.sbase) */
   --ov-cap-max-h: 64px; /* max height of the scrolling live-text region */
 }
@@ -366,4 +367,51 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Error card — icon (left) beside a title and a wrapping instruction. Pops in
+   like the Live card, but never morphs; the backend hides it after a delay. */
+.scard.serror {
+  box-sizing: border-box; /* padding inside --ov-error-w, so overlay.rs can size to it */
+  width: var(--ov-error-w);
+  border-radius: 16px;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 11px;
+  padding-block: 12px 13px;
+  padding-inline: 13px 16px; /* icon side first, so RTL mirrors it */
+  border-color: color-mix(in srgb, var(--color-error) 35%, transparent);
+}
+.serror-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-error);
+  background: color-mix(in srgb, var(--color-error) 14%, transparent);
+}
+.serror-icon svg {
+  width: 15px;
+  height: 15px;
+}
+.serror-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 1px;
+}
+.serror-title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--color-text);
+}
+.serror-body {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--s-muted);
 }
