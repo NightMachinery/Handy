@@ -212,6 +212,21 @@ to avoid blocking, because two independent spawns have no order relative to each
 other and the unregister can overtake the register it undoes. That left Escape
 registered after recording ended and broke the next recording's binding.
 
+### Overlay Show/Hide Ordering
+
+Every overlay show runs on the main thread, and so does every hide
+(`hide_recording_overlay` hops there itself). `OVERLAY_SHOW_GENERATION` in
+`src-tauri/src/overlay.rs` is bumped by each show; a delayed hide — the 300 ms
+wait for the fade-out, or the error card's six seconds — records it when
+scheduled and acts on the main thread only if it is unchanged. Do not hide the
+overlay window from a background thread or behind a timer that skips that
+check: a stale hide then lands under the next recording and hides it.
+
+The overlay also has an `error` state, an enlarged card that is shown even
+when the overlay style is None. Recording start uses it to refuse the built-in
+microphone while a Mac's lid is closed, which the hardware has cut off. See
+[docs/builtin_mic_lid_closed.md](docs/builtin_mic_lid_closed.md).
+
 ## Internationalization (i18n)
 
 All user-facing strings must use i18next translations. ESLint enforces this (no hardcoded strings in JSX).

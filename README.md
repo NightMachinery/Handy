@@ -500,6 +500,10 @@ Handy 0.9.4 and earlier listened for `SIGUSR1` as a remote-control trigger. WebK
 
 Update to a newer release, and replace any `pkill -USR1 -n handy` keybindings with `handy --toggle-post-process`.
 
+### "Built-in Microphone Unavailable" With the Lid Closed (macOS)
+
+Macs switch off the built-in microphone in hardware while the lid is closed, so a recording from it would capture only silence. Handy refuses to record from it in that state and shows this error instead. Connect a microphone or headset and try again. If Handy is set to a specific microphone, choose the new one in Settings, or set a Clamshell Microphone under Debug settings. See [docs/builtin_mic_lid_closed.md](docs/builtin_mic_lid_closed.md).
+
 ### How to Contribute
 
 1. **Check existing issues** at [github.com/cjpais/Handy/issues](https://github.com/cjpais/Handy/issues)
