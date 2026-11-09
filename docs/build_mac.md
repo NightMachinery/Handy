@@ -45,18 +45,26 @@ That hash changes on every build, so macOS TCC sees each install as a
 different application and resets Accessibility and Microphone permissions —
 you re-grant them after every rebuild.
 
-`--setup-signing` creates a self-signed code signing certificate named
-"Handy Local Signing" in your login keychain and adds a Code Signing trust
-setting (macOS will prompt for your password — this is the step that needs it;
-`security find-identity` only lists _trusted_ identities, so an untrusted
-certificate is invisible to the build). Afterwards the designated requirement
-becomes the certificate's leaf hash, which is stable for the certificate's
-ten-year lifetime, and permissions persist.
+`--setup-signing` runs
+[macos-local-signing](https://github.com/NightMachinery/macos-local-signing),
+which must be installed, to create a self-signed code signing certificate
+named "Handy Local Signing" and add a Code Signing trust setting (macOS will
+prompt for your password once; this is the step that needs it). Afterwards
+the designated requirement becomes the certificate's leaf hash, which is
+stable for the certificate's ten-year lifetime, and permissions persist.
 
-The identity is passed to the build as a `--config` override rather than
-committed to `tauri.conf.json`, so a fresh checkout without the certificate
-still builds — it just falls back to ad-hoc and says so. Override the name with
-`HANDY_SIGN_IDENTITY` if you already have a certificate you prefer.
+The certificate and its key are kept as a file, not in the login keychain:
+with the key there, codesign asked for the login password once per signed
+file. The build hands the file to tauri through `APPLE_CERTIFICATE`, and
+tauri imports it into a throwaway keychain, so building never prompts. A
+certificate made by an earlier version of this script, in the login keychain,
+is moved into the file store rather than replaced, so the permissions Handy
+already holds stay.
+
+Nothing is committed to `tauri.conf.json`, so a fresh checkout without the
+certificate still builds: it falls back to ad-hoc and says so. Override the
+name with `HANDY_SIGN_IDENTITY` if you prefer another certificate in the same
+store.
 
 Note this is a _local_ identity, not an Apple Developer one: it does nothing
 for Gatekeeper or for distributing the app to anyone else. Its only job is to

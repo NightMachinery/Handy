@@ -11,6 +11,7 @@
 #   bash scripts/install-macos.sh --no-build       install what is already built
 #   bash scripts/install-macos.sh --link-only      reinstall just the CLI
 #   bash scripts/install-macos.sh --setup-signing  create the local signing identity
+#                                                  (needs macos-local-signing, see below)
 #
 # Environment overrides:
 #   HANDY_APP_DIR        where the bundle goes      (default /Applications)
@@ -53,7 +54,8 @@ die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 [ "$(uname -s)" = "Darwin" ] || die "this script is macOS-only"
 
 has_identity() {
-  security find-identity -v -p codesigning 2>/dev/null | grep -qF "$SIGN_IDENTITY"
+  command -v macos-local-signing >/dev/null 2>&1 &&
+    macos-local-signing ready "$SIGN_IDENTITY"
 }
 
 # ---------------------------------------------------------------------------
@@ -66,46 +68,20 @@ has_identity() {
 # Accessibility and Microphone permissions reset. A self-signed certificate
 # fixes it: the requirement becomes the certificate's leaf hash, which is
 # stable for the life of the cert.
+#
+# The certificate is kept as a file by macos-local-signing
+# (https://github.com/NightMachinery/macos-local-signing), not in the login
+# keychain: with the key there, codesign asked for the login password once per
+# signed file. tauri imports the file into a throwaway keychain of its own
+# (APPLE_CERTIFICATE), so a build never prompts.
 
 setup_signing() {
-  if has_identity; then
-    say "Signing identity '$SIGN_IDENTITY' is already usable"
-    return 0
-  fi
-
-  local keychain="$HOME/Library/Keychains/login.keychain-db"
-  local tmp
-  tmp="$(mktemp -d)"
-  # shellcheck disable=SC2064
-  trap "rm -rf '$tmp'" RETURN
-
-  if ! security find-certificate -c "$SIGN_IDENTITY" >/dev/null 2>&1; then
-    say "Creating a self-signed code signing certificate: $SIGN_IDENTITY"
-    openssl req -x509 -newkey rsa:4096 -keyout "$tmp/key.pem" -out "$tmp/cert.pem" \
-      -days 3650 -nodes -subj "/CN=$SIGN_IDENTITY" \
-      -addext "basicConstraints=critical,CA:FALSE" \
-      -addext "keyUsage=critical,digitalSignature" \
-      -addext "extendedKeyUsage=critical,codeSigning" 2>/dev/null
-
-    # macOS Security cannot verify OpenSSL 3's default PKCS#12 MAC, so pin the
-    # legacy algorithms it does understand.
-    openssl pkcs12 -export -out "$tmp/id.p12" -inkey "$tmp/key.pem" -in "$tmp/cert.pem" \
-      -name "$SIGN_IDENTITY" -passout pass:handy \
-      -legacy -macalg sha1 -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES 2>/dev/null
-
-    security import "$tmp/id.p12" -k "$keychain" -P handy \
-      -T /usr/bin/codesign -T /usr/bin/security >/dev/null
-  else
-    say "Certificate exists but is not trusted for code signing"
-  fi
-
-  # find-identity only lists trusted identities, so the trust setting is what
-  # makes the certificate usable. This prompts for your login password.
-  say "Adding a Code Signing trust setting (macOS will ask for your password)"
-  security find-certificate -c "$SIGN_IDENTITY" -p > "$tmp/cert.pem"
-  security add-trusted-cert -r trustRoot -p codeSign -k "$keychain" "$tmp/cert.pem"
-
-  has_identity || die "identity still not usable; check Keychain Access for '$SIGN_IDENTITY'"
+  command -v macos-local-signing >/dev/null 2>&1 ||
+    die "install macos-local-signing first: https://github.com/NightMachinery/macos-local-signing"
+  # Trusting the certificate shows one password dialog; a certificate made by
+  # an older version of this script is moved out of the login keychain instead
+  # of replaced, so the permissions Handy already holds stay.
+  macos-local-signing ensure "$SIGN_IDENTITY" >/dev/null
   say "Signing identity ready"
 }
 
@@ -155,18 +131,18 @@ SH
   chmod +x "$FAKEBIN/xattr"
   trap 'rm -rf "$FAKEBIN"' EXIT
 
-  # Prefer a stable signing identity. Passed as a config override rather than
-  # committed to tauri.conf.json, so a checkout without this certificate still
-  # builds (ad-hoc) instead of failing.
-  SIGN_ARGS=()
+  # Prefer a stable signing identity, handed to tauri through its environment
+  # rather than committed to tauri.conf.json, so a checkout without this
+  # certificate still builds (ad-hoc) instead of failing.
   if has_identity; then
     say "Signing as '$SIGN_IDENTITY' — macOS permissions survive reinstalls"
-    SIGN_ARGS=(--config "{\"bundle\":{\"macOS\":{\"signingIdentity\":\"$SIGN_IDENTITY\"}}}")
+    eval "$(macos-local-signing env "$SIGN_IDENTITY" tauri)"
   else
     warn "No '$SIGN_IDENTITY' identity found; signing ad-hoc.
     Every build will get a new code hash, so macOS will treat it as a new app
     and reset Accessibility and Microphone permissions on each install.
-    Fix it once with: bash scripts/install-macos.sh --setup-signing"
+    Fix it once with: bash scripts/install-macos.sh --setup-signing
+    (needs https://github.com/NightMachinery/macos-local-signing)"
   fi
 
   # The bundler exits non-zero after a successful bundle when no updater
@@ -177,7 +153,7 @@ SH
     PATH="$FAKEBIN:$PATH" \
     CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-$(mktemp -d)}" \
     CMAKE_POLICY_VERSION_MINIMUM="${CMAKE_POLICY_VERSION_MINIMUM:-3.5}" \
-    bun run tauri build --bundles app "${SIGN_ARGS[@]}" )
+    bun run tauri build --bundles app )
   build_status=$?
   set -e
 
