@@ -431,3 +431,22 @@ flagged as `cold_load` in the JSON output.
 **Post-processing can fail quietly.** The pipeline falls back to the pre-LLM
 text when a provider errors, so `--json` reports `post_processed` (requested)
 and `post_process_applied` (actually happened) separately.
+
+### Live control-socket transcription
+
+Send `{"type":"transcribe_stream"}` followed by a newline on a normal control
+socket connection after its `hello`. The remainder of the request is binary.
+Prefix each chunk of signed 16-bit little-endian PCM (16 kHz, mono) with its
+byte length as a four-byte unsigned little-endian integer. A zero length
+ends the input. Each chunk can be at most 32 KiB, and a stream can hold up to
+30 minutes of audio.
+
+Read newline-delimited server frames concurrently. `partial` carries the
+`committed` and `tentative` parts of the current text. The terminal
+`result` carries `{"kind":"stream_transcript","text":"..."}` in its
+`body`. An `error` ends the job. Closing the connection without the
+zero-length frame abandons the stream.
+
+The job uses the selected streaming-capable Handy model and takes the same
+engine lease as file transcription. A busy engine returns an error. The
+transcript goes to the socket client and the job closes the connection.

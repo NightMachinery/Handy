@@ -17,6 +17,47 @@ use log::{error, info, warn};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
 
+/// Keep the GUI's selected model and audio settings while feeding a headless
+/// stream through the same engine lease and inference path as a file job.
+pub fn handle_stream(
+    job: &JobContext,
+    chunks: impl Iterator<Item = anyhow::Result<Vec<f32>>>,
+) -> HandlerResult {
+    let transcription = &job.ctx.transcription;
+    job.progress(Stage::WaitingForEngine, None);
+    let lease = transcription
+        .try_lease_engine(LeaseOwner::Cli)
+        .map_err(lease_error)?;
+    let wanted = get_settings(&job.ctx.app).selected_model;
+    if wanted.is_empty() {
+        return Err(HandlerError::new(
+            ErrorCode::NoModelSelected,
+            "select a streaming-capable model in Handy",
+        ));
+    }
+    if transcription.get_current_model().as_deref() != Some(wanted.as_str())
+        || !transcription.is_model_loaded()
+    {
+        job.progress(Stage::LoadingModel, None);
+        transcription
+            .load_model_with_device(&wanted, None)
+            .map_err(|err| HandlerError::new(ErrorCode::ModelLoadFailed, err.to_string()))?;
+    }
+    job.progress(Stage::Transcribing, None);
+    let text = transcription
+        .transcribe_live_with_lease(&lease, chunks, &job.cancel, |progress| {
+            job.partial(&progress.committed_text, &progress.tentative_text);
+        })
+        .map_err(|err| HandlerError::new(ErrorCode::TranscriptionFailed, err.to_string()))?
+        .ok_or_else(|| {
+            HandlerError::new(
+                ErrorCode::TranscriptionFailed,
+                "the selected Handy model could not start streaming",
+            )
+        })?;
+    Ok(ResultBody::StreamTranscript { text })
+}
+
 pub fn handle(
     job: &JobContext,
     request: TranscribeRequest,

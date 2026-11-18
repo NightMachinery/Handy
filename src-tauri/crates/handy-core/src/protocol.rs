@@ -93,6 +93,9 @@ pub enum ClientFrame {
     Status,
     /// Transcribe a buffer of audio.
     Transcribe(Box<TranscribeRequest>),
+    /// Stream 16 kHz mono PCM16LE using length-prefixed binary audio.
+    /// The zero-length frame ends the input and this job owns the connection.
+    TranscribeStream,
     /// Abandon the in-flight job on this connection.
     Cancel,
     /// Graceful close.
@@ -299,6 +302,7 @@ pub enum ResultBody {
     Pong { app_version: String },
     Status(Box<StatusBody>),
     Transcript(Box<TranscriptBody>),
+    StreamTranscript { text: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

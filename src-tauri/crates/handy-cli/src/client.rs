@@ -221,7 +221,7 @@ fn print_simple_result(body: &ResultBody, json: bool) {
                 println!("post-proc:  {}", status.post_process_enabled);
             }
         }
-        ResultBody::Transcript(_) => {}
+        ResultBody::Transcript(_) | ResultBody::StreamTranscript { .. } => {}
     }
 }
 

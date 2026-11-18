@@ -25,7 +25,7 @@ use crate::managers::history::HistoryManager;
 use crate::managers::model::ModelManager;
 use crate::managers::transcription::TranscriptionManager;
 use log::{error, info, warn};
-use std::io::{BufReader, Write};
+use std::io::{BufReader, Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
@@ -148,6 +148,8 @@ pub type HandlerResult = Result<ResultBody, HandlerError>;
 enum Event {
     /// A parsed request, with its inline audio already consumed from the stream.
     Frame(Box<ClientFrame>, Option<Vec<f32>>),
+    /// Streaming jobs use the rest of the connection for binary audio.
+    Stream(mpsc::Receiver<anyhow::Result<Vec<f32>>>),
     /// The reader hit EOF, a parse error, or a protocol violation.
     Closed(Option<HandlerError>),
     /// The running job finished (successfully or not).
@@ -290,6 +292,10 @@ fn serve_connection(conn: Connection, ctx: Arc<ServerContext>) {
             // No job is awaiting; a completion from a job we already stopped
             // waiting on is not interesting.
             Event::JobDone => continue,
+            Event::Stream(chunks) => {
+                serve_stream(&ctx, &out, chunks);
+                return;
+            }
             Event::Frame(frame, audio) => {
                 if dispatch(*frame, audio, &ctx, &out, &ev_rx, &ev_tx).is_break() {
                     return;
@@ -339,7 +345,7 @@ fn dispatch(
             send(out, &frame);
             Continue(())
         }
-        ClientFrame::Unknown => {
+        ClientFrame::TranscribeStream | ClientFrame::Unknown => {
             send(
                 out,
                 &ServerFrame::Error {
@@ -432,6 +438,10 @@ fn await_job(cancel: &Arc<AtomicBool>, ev_rx: &mpsc::Receiver<Event>) -> std::op
                 cancel.store(true, Ordering::Relaxed);
                 client_gone = true;
             }
+            Ok(Event::Stream(_)) => {
+                cancel.store(true, Ordering::Relaxed);
+                client_gone = true;
+            }
             Ok(Event::Frame(frame, _)) => match *frame {
                 ClientFrame::Cancel | ClientFrame::Bye => {
                     cancel.store(true, Ordering::Relaxed);
@@ -466,6 +476,14 @@ fn run_reader<R: std::io::Read>(rx: R, ev_tx: mpsc::Sender<Event>) {
             }
         };
 
+        if matches!(frame, ClientFrame::TranscribeStream) {
+            let (tx, rx) = mpsc::sync_channel(8);
+            if ev_tx.send(Event::Stream(rx)).is_ok() {
+                read_stream_audio(reader, tx);
+            }
+            return;
+        }
+
         // Inline audio must be consumed here, in stream order, before the next
         // control frame can be read — regardless of how long the job queue is.
         let audio = match &frame {
@@ -482,6 +500,75 @@ fn run_reader<R: std::io::Read>(rx: R, ev_tx: mpsc::Sender<Event>) {
         };
 
         if ev_tx.send(Event::Frame(Box::new(frame), audio)).is_err() {
+            return;
+        }
+    }
+}
+
+fn serve_stream(
+    ctx: &Arc<ServerContext>,
+    out: &Out,
+    chunks: mpsc::Receiver<anyhow::Result<Vec<f32>>>,
+) {
+    let job = JobContext {
+        ctx: Arc::clone(ctx),
+        job_id: next_job_id(),
+        cancel: Arc::new(AtomicBool::new(false)),
+        started: Instant::now(),
+        want_progress: true,
+        out: Arc::clone(out),
+    };
+    if !send(
+        out,
+        &ServerFrame::Accepted {
+            job_id: job.job_id.clone(),
+        },
+    ) {
+        return;
+    }
+    let stop_heartbeat = spawn_heartbeat(&job);
+    let outcome = handlers::transcribe::handle_stream(&job, chunks.into_iter());
+    stop_heartbeat.store(true, Ordering::Relaxed);
+    let frame = match outcome {
+        Ok(body) => ServerFrame::Result {
+            job_id: job.job_id,
+            body,
+        },
+        Err(e) => ServerFrame::Error {
+            job_id: Some(job.job_id),
+            code: e.code,
+            message: e.message,
+        },
+    };
+    send(out, &frame);
+}
+
+fn read_stream_audio<R: Read>(mut input: R, tx: mpsc::SyncSender<anyhow::Result<Vec<f32>>>) {
+    // Keep the same bounds as the desk, even when another client speaks IPC.
+    const MAX_CHUNK: usize = 32 * 1024;
+    const MAX_AUDIO: usize = 30 * 60 * 16_000 * 2;
+    let mut total = 0;
+    loop {
+        let mut size = [0; 4];
+        if let Err(err) = input.read_exact(&mut size) {
+            let _ = tx.send(Err(anyhow::anyhow!("audio stream disconnected: {err}")));
+            return;
+        }
+        let size = u32::from_le_bytes(size) as usize;
+        if size == 0 {
+            return;
+        }
+        total += size;
+        if size > MAX_CHUNK || size % 2 != 0 || total > MAX_AUDIO {
+            let _ = tx.send(Err(anyhow::anyhow!("invalid PCM stream chunk size")));
+            return;
+        }
+        let mut audio = vec![0; size];
+        if let Err(err) = input.read_exact(&mut audio) {
+            let _ = tx.send(Err(anyhow::anyhow!("truncated PCM stream chunk: {err}")));
+            return;
+        }
+        if tx.send(Ok(AudioEncoding::PcmS16Le.decode(&audio))).is_err() {
             return;
         }
     }
@@ -601,4 +688,30 @@ fn current_uid() -> Option<u32> {
 pub fn shutdown() {
     info!("Removing the CLI control socket");
     endpoint::cleanup();
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::*;
+
+    #[test]
+    fn reads_framed_pcm_and_end() {
+        let input = [2, 0, 0, 0, 255, 127, 0, 0, 0, 0];
+        let (tx, rx) = mpsc::sync_channel(2);
+        read_stream_audio(input.as_slice(), tx);
+        assert_eq!(rx.recv().unwrap().unwrap(), vec![1.0]);
+        assert!(rx.recv().is_err());
+    }
+
+    #[test]
+    fn rejects_unterminated_and_bad_chunks() {
+        let (tx, rx) = mpsc::sync_channel(2);
+        read_stream_audio([1, 0, 0, 0, 0].as_slice(), tx);
+        assert!(rx.recv().unwrap().is_err());
+
+        let (tx, rx) = mpsc::sync_channel(2);
+        read_stream_audio([2, 0, 0, 0, 0, 0].as_slice(), tx);
+        assert!(rx.recv().unwrap().is_ok());
+        assert!(rx.recv().unwrap().is_err());
+    }
 }

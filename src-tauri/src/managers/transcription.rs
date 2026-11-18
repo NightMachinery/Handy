@@ -1235,11 +1235,37 @@ impl TranscriptionManager {
         _lease: &EngineLease,
         audio: &[f32],
         cancel: &Arc<AtomicBool>,
-        mut on_progress: impl FnMut(StreamProgress),
+        on_progress: impl FnMut(StreamProgress),
     ) -> Result<Option<String>> {
         if audio.is_empty() {
             return Ok(Some(String::new()));
         }
+        self.transcribe_stream_chunks(
+            audio.chunks(STREAM_FILE_CHUNK).map(Ok),
+            Some(audio.len()),
+            cancel,
+            on_progress,
+        )
+    }
+
+    /// Run an external audio stream while the caller holds the CLI engine lease.
+    pub fn transcribe_live_with_lease(
+        &self,
+        _lease: &EngineLease,
+        chunks: impl Iterator<Item = Result<Vec<f32>>>,
+        cancel: &Arc<AtomicBool>,
+        on_progress: impl FnMut(StreamProgress),
+    ) -> Result<Option<String>> {
+        self.transcribe_stream_chunks(chunks, None, cancel, on_progress)
+    }
+
+    fn transcribe_stream_chunks<S: AsRef<[f32]>>(
+        &self,
+        chunks: impl Iterator<Item = Result<S>>,
+        total_samples: Option<usize>,
+        cancel: &Arc<AtomicBool>,
+        mut on_progress: impl FnMut(StreamProgress),
+    ) -> Result<Option<String>> {
         self.touch_activity();
 
         // Wait out any in-flight load, exactly as the batch path does.
@@ -1292,7 +1318,7 @@ impl TranscriptionManager {
             ..Default::default()
         };
 
-        let total_secs = audio.len() as f64 / WHISPER_SAMPLE_RATE as f64;
+        let total_secs = total_samples.unwrap_or_default() as f64 / WHISPER_SAMPLE_RATE as f64;
         let started = Instant::now();
 
         // A panicking engine must not be put back, mirroring the batch path.
@@ -1310,7 +1336,11 @@ impl TranscriptionManager {
             };
 
             let mut last_report = Instant::now();
-            for chunk in audio.chunks(STREAM_FILE_CHUNK) {
+            let mut sample_count = 0;
+            for chunk in chunks {
+                let chunk = chunk?;
+                let chunk = chunk.as_ref();
+                sample_count += chunk.len();
                 if cancel.load(Ordering::Relaxed) {
                     stream.reset();
                     return Err(anyhow::anyhow!("cancelled"));
@@ -1331,11 +1361,15 @@ impl TranscriptionManager {
                             });
                         }
                     }
+                    Err(e) if total_samples.is_none() => return Err(e.into()),
                     Err(e) => warn!("stream feed failed: {e}"),
                 }
                 self.touch_activity();
             }
 
+            if sample_count == 0 {
+                anyhow::bail!("the audio stream contained no samples");
+            }
             match stream.finalize() {
                 // After finalize the committed prefix holds the whole text;
                 // display() = committed + tentative is the safe read.
@@ -1344,15 +1378,17 @@ impl TranscriptionManager {
                     // total, so without this the bar stops at 99% — which reads
                     // as unfinished in a log, where the line is not erased.
                     let text = stream.text();
+                    let duration = sample_count as f64 / WHISPER_SAMPLE_RATE as f64;
                     on_progress(StreamProgress {
-                        committed_secs: total_secs,
-                        total_secs,
+                        committed_secs: duration,
+                        total_secs: duration,
                         elapsed: started.elapsed(),
                         committed_text: text.committed.clone(),
                         tentative_text: text.tentative.clone(),
                     });
                     Ok(Some(text.display()))
                 }
+                Err(e) if total_samples.is_none() => Err(e.into()),
                 Err(e) => {
                     warn!("stream finalize failed ({e}); using batch instead");
                     Ok(None)
