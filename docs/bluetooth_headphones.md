@@ -1,10 +1,12 @@
 # Bluetooth headphone volume during dictation on macOS
 
-When an app opens a Bluetooth headset's microphone, macOS can switch the headset from stereo playback to a mode that supports both recording and playback. Apple documents a change in sound quality and volume during this switch. A volume increase alone does not establish that the switch caused it. [Apple's explanation of Bluetooth audio modes](https://support.apple.com/en-ie/102217)
+Opening a Bluetooth headset's microphone can switch it from stereo playback to two-way audio. macOS can select a higher output volume during that switch, making other apps' playback louder. [Apple's explanation of Bluetooth audio modes](https://support.apple.com/en-ie/102217)
 
-To isolate the trigger, keep the headset connected as the Mac's output and change only **General → Sound → Microphone** in Handy. Compare the headset microphone with a USB mic or the Mac's built-in mic with the lid open. Use a low playback level. If switching the input resolves the problem, you can keep that microphone selected for dictation and continue listening through the headphones.
+Handy reads the headset's output volume before opening its microphone. During the switch it checks the Core Audio output volume and lowers an increase to the previous setting. This works with **Mute While Recording** on or off. A quieter recording profile keeps its level. The check finishes after the switch so the volume keys work normally during dictation.
 
-If you need the headset microphone and music gets louder, watch the macOS output volume in Control Center. If it rises when recording starts and returns to its old position after recording stops, try lowering it **while the headset microphone is active**. To test this, take the headphones off, pause playback, and temporarily turn off **Mute While Recording**. Start a recording, lower the output slider, then stop and start another recording to see whether the level is remembered. Restore your preferred mute setting afterwards.
+The guard runs when a capture stream opens, including always-on startup and reconnection. It checks that the default output belongs to the selected Bluetooth microphone and writes directly to that output's virtual main volume control, which preserves channel balance. The guard leaves the mute control to Handy's existing feedback and mute sequence.
+
+To keep stereo playback during dictation, choose the Mac's built-in mic (with the lid open) or a USB mic in **General → Sound → Microphone** and keep the headphones selected for output.
 
 If only Handy's start and stop tones are loud, turn off **Audio Feedback** for one recording. If your own voice sounds amplified, some Bose models have a **Self Voice** setting in the Bose app that controls how much of your voice you hear during calls. [Bose QuietComfort Ultra user guide](https://assets.bose.com/content/dam/Bose_DAM/Web/consumer_electronics/global/products/headphones/qcuh2-headphonearn/pdfs/897194_OG_QCUH2-HEADPHONEARN_ML.pdf)
 

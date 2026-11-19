@@ -1,4 +1,6 @@
 // Re-export all audio components
+#[cfg(target_os = "macos")]
+mod bluetooth_volume;
 mod device;
 mod recorder;
 mod utils;

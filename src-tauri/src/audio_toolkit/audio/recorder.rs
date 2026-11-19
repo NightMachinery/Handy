@@ -184,9 +184,11 @@ impl AudioRecorder {
         let worker = std::thread::spawn(move || {
             let stop_flag = Arc::new(AtomicBool::new(false));
             let stop_flag_for_stream = stop_flag.clone();
+            let device_name = thread_device.name().unwrap_or_default();
+            #[cfg(target_os = "macos")]
+            let volume_guard = super::bluetooth_volume::BluetoothVolumeGuard::arm(&device_name);
             let init_result = (|| -> Result<(cpal::Stream, u32), String> {
                 let config_started = Instant::now();
-                let device_name = thread_device.name().unwrap_or_default();
                 let cached_config = config_cache
                     .lock()
                     .unwrap()
@@ -317,6 +319,8 @@ impl AudioRecorder {
                         stop_flag,
                         stream_running_at,
                     );
+                    #[cfg(target_os = "macos")]
+                    drop(volume_guard);
                     drop(stream);
                 }
                 Err(error_message) => {

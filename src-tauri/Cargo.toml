@@ -161,6 +161,8 @@ objc2-service-management = "0.3.2"
 # tells the built-in microphone apart. All three are already in the tree
 # through cpal (same features); these entries only make them nameable.
 core-foundation-sys = "0.8"
+core-foundation = "0.10"
+objc2-audio-toolbox = { version = "0.3", default-features = false, features = ["objc2-core-audio"] }
 coreaudio-rs = { version = "0.13", default-features = false, features = [
   "audio_toolbox",
 ] }

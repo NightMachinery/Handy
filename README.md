@@ -502,7 +502,7 @@ Update to a newer release, and replace any `pkill -USR1 -n handy` keybindings wi
 
 ### Bluetooth Headphones Change Volume During Dictation (macOS)
 
-Keep the headphones selected for macOS output. In Handy's **General → Sound → Microphone**, choose the Mac's built-in microphone (with the lid open) or a USB mic and try dictating again. This tests whether opening the headset microphone triggers the change. See [Bluetooth headphone troubleshooting](docs/bluetooth_headphones.md) if you use the headset mic for dictation.
+Handy guards against a volume jump when macOS switches a Bluetooth headset into two-way audio. This applies with **Mute While Recording** on or off. To keep stereo playback during dictation, choose a separate microphone in **General → Sound → Microphone**. See [Bluetooth headphone troubleshooting](docs/bluetooth_headphones.md).
 
 ### "Built-in Microphone Unavailable" With the Lid Closed (macOS)
 
