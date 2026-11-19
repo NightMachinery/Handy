@@ -500,6 +500,10 @@ Handy 0.9.4 and earlier listened for `SIGUSR1` as a remote-control trigger. WebK
 
 Update to a newer release, and replace any `pkill -USR1 -n handy` keybindings with `handy --toggle-post-process`.
 
+### Bluetooth Headphones Change Volume During Dictation (macOS)
+
+Keep the headphones selected for macOS output. In Handy's **General → Sound → Microphone**, choose the Mac's built-in microphone (with the lid open) or a USB mic and try dictating again. This tests whether opening the headset microphone triggers the change. See [Bluetooth headphone troubleshooting](docs/bluetooth_headphones.md) if you use the headset mic for dictation.
+
 ### "Built-in Microphone Unavailable" With the Lid Closed (macOS)
 
 Macs switch off the built-in microphone in hardware while the lid is closed, so a recording from it would capture only silence. Handy refuses to record from it in that state and shows this error instead. Connect a microphone or headset and try again. If Handy is set to a specific microphone, choose the new one in Settings, or set a Clamshell Microphone under Debug settings. See [docs/builtin_mic_lid_closed.md](docs/builtin_mic_lid_closed.md).
